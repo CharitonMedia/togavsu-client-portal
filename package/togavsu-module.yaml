@@ -1,6 +1,6 @@
 # Client Portal: the client's own screens, the staff Messages inbox and the Portal
-# access panel. Fields marked with a CORE comment need that item of the module API
-# update (docs/modules/CORE-CHANGES.md in the core repository).
+# access panel. pending.yaml beside this file names each field and scope that needs an
+# item of the module API update (docs/modules/CORE-CHANGES.md in the core repository).
 id: client-portal
 name: Client Portal
 version: "1.0.0"
@@ -12,14 +12,12 @@ container:
   image: ghcr.io/charitonmedia/togavsu-client-portal
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   port: 8080
-# CORE-10
 client_home: home
 permissions:
   - scope: matters:read
     reason: List the client's matters and the matter behind each thread.
   - scope: contacts:read
     reason: Show staff the client parties on a matter and each client's name.
-  # CORE-19
   - scope: users:directory
     reason: Label each message with the staff member who wrote it.
   - scope: files:read
@@ -36,20 +34,16 @@ permissions:
     reason: Read the signed-in client's account and contact details.
   - scope: profile:write
     reason: Save the client's own contact detail changes.
-  # CORE-18
   - scope: firm:read
     reason: Firm name, phone, email and client portal colors.
   - scope: events:write
     reason: Put message and document activity on the case timeline.
   - scope: notifications:write
     reason: Tell staff when a client writes or uploads.
-  # CORE-04
   - scope: mail:send
     reason: Email a client that the firm sent a message.
-  # CORE-14
   - scope: client_access:read
     reason: Show each client's portal status on the matter.
-  # CORE-14
   - scope: client_access:write
     reason: Grant, resend, reset and turn off portal access.
   - scope: views:lawpay-docuseal.invoice_payability:read
@@ -82,15 +76,12 @@ tabs:
     title: Messages
     placement: home
     path: /staff/inbox
-    # CORE-10: tab params
     params: [matter_id, contact_id, status, thread_id]
   - id: messages
     title: Messages
     placement: matter
     path: /staff/matter-messages
-    # CORE-10: tab params
     params: [thread_id]
-  # CORE-10: client placement and params
   - id: home
     title: Dashboard
     placement: client
@@ -123,7 +114,6 @@ sidebar:
   - id: messages
     title: Messages
     path: /staff/inbox
-    # CORE-08
     section: communications
     icon: message
     order: 10
@@ -138,7 +128,6 @@ search_scopes:
   - id: messages
     title: Messages
     path: /staff/search
-# CORE-03
 notifications:
   - kind: client_message
     label: A client sent a portal message

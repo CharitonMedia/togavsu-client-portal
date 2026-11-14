@@ -33,10 +33,8 @@ jobs:
       - name: Wait for Postgres
         run: until pg_isready -h 127.0.0.1 -p 5432; do sleep 1; done
       - run: go test -race ./...
-      # The step `go run github.com/CharitonMedia/togavsu/cmd/togavsu-module check package`
-      # returns when module-core lands. Until then the core main refuses the shipped
-      # manifest's pending fields (internal/coremain lists each with its CORE item), and
-      # go test checks the package instead: TestCoreMainVariantPassesCoreCheck runs the
-      # same check on the package without those fields, and
-      # TestFullManifestRefusedOnlyForPendingFields fails once the core accepts them.
+      # The pinned core's install check on the package, with the parts in
+      # package/pending.yaml held back (each waits on a CORE item). It fails on any
+      # refusal pending.yaml doesn't cover.
+      - run: go run github.com/CharitonMedia/togavsu/cmd/togavsu-module check -installable package
       - run: docker build -t togavsu-client-portal .

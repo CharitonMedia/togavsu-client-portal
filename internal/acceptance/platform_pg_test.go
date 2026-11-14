@@ -14,7 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/CharitonMedia/togavsu-client-portal/internal/coremain"
 	"github.com/CharitonMedia/togavsu/pkg/modulekit"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -95,20 +94,20 @@ func onlyModuleKeys(d *sql.DB, table, stmt string, args ...any) error {
 }
 
 // installProvider installs the lawpay-docuseal fixture (testdata/lawpay-docuseal)
-// signed with its own trusted key. It answers no pages; client-portal only reads its
-// views and links to its tabs.
+// signed with its own trusted key, its client tabs held back until CORE-10 (its
+// pending.yaml). It answers no pages; client-portal only reads its views and links to
+// its tabs.
 func (e *env) installProvider() *sql.DB {
 	e.t.Helper()
 	files, err := modulekit.ReadDir("testdata/lawpay-docuseal")
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	coremain.Edit(files)
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	signed, err := modulekit.Build(priv, files)
+	signed, _, err := modulekit.BuildInstallable(priv, files)
 	if err != nil {
 		e.t.Fatal(err)
 	}

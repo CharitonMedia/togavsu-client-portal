@@ -6,12 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
 
 	clientportal "github.com/CharitonMedia/togavsu-client-portal"
-	"github.com/CharitonMedia/togavsu-client-portal/internal/coremain"
 	"github.com/CharitonMedia/togavsu/pkg/modulekit"
 )
 
@@ -24,19 +24,6 @@ func testKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return pub, key
 }
 
-// skipIfPending skips when the core refused the real manifest for a field that waits
-// on a module-core item, and fails on any other refusal.
-func skipIfPending(t *testing.T, err error) {
-	t.Helper()
-	if err == nil {
-		return
-	}
-	if item := coremain.Item(err); item != "" {
-		t.Skipf("needs %s: %v", item, err)
-	}
-	t.Fatal(err)
-}
-
 func TestPackageFiles(t *testing.T) {
 	files, err := clientportal.Files()
 	if err != nil {
@@ -47,7 +34,7 @@ func TestPackageFiles(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	want := []string{"migrations/0001_messages.sql", "migrations/0002_portal_state.sql", "togavsu-module.yaml"}
+	want := []string{"migrations/0001_messages.sql", "migrations/0002_portal_state.sql", "pending.yaml", "togavsu-module.yaml"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("package files = %v, want %v", names, want)
 	}
@@ -73,69 +60,95 @@ func TestPackageFiles(t *testing.T) {
 	}
 }
 
-// The full manifest keeps the spec's fields that wait on module-core items, and the
-// core main refuses the package for those fields alone: each field in coremain.Fields
-// is refused on its own, naming itself, and the manifest without them all passes
-// (TestCoreMainVariantPassesCoreCheck). When the core accepts a field this fails: drop
-// it from coremain.Fields. When it accepts them all, delete internal/coremain and put
-// the `togavsu-module check package` step back in CI.
-func TestFullManifestRefusedOnlyForPendingFields(t *testing.T) {
-	files, err := modulekit.ReadDir("package")
+// signedFiles verifies signed against pub and returns the package files it carries.
+func signedFiles(t *testing.T, signed []byte, pub ed25519.PublicKey) (modulekit.Verified, map[string][]byte) {
+	t.Helper()
+	v, _, err := verify(t, signed, pub)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = modulekit.Check(files)
-	switch {
-	case err == nil:
-		t.Fatal("the core main now accepts the full package: delete internal/coremain and put the togavsu-module check step back in CI")
-	case coremain.Item(err) == "":
-		t.Fatalf("the full package is refused for something other than a pending field: %v", err)
+	pkg, err := modulekit.ReadPackage(v.Package)
+	if err != nil {
+		t.Fatal(err)
 	}
-	full := files[clientportal.ManifestFile]
-	for _, f := range coremain.Fields {
-		edited := make(map[string][]byte, len(files))
-		for name, b := range files {
-			edited[name] = b
-		}
-		edited[clientportal.ManifestFile] = coremain.Strip(full, f.Name)
-		_, _, err := modulekit.Check(edited)
-		switch {
-		case err == nil:
-			t.Errorf("the core main now accepts %s (%s, %s): drop it from coremain.Fields", f.Name, f.Where, f.Item)
-		case coremain.Item(err) != f.Item || !strings.Contains(err.Error(), f.Name):
-			t.Errorf("with only %s kept, the core refused: %v", f.Name, err)
-		default:
-			t.Logf("needs %s: %s refused: %v", f.Item, f.Name, err)
-		}
+	return v, pkg.Files
+}
+
+// The package command's build: the full package with a key made now, every refusal of
+// the pinned core covered by a pending entry and every entry holding something back.
+// The signed file verifies, and the files it carries pass the core's install check
+// with no refusals and no pending list. When a CORE item lands, its entries hold
+// nothing back and this fails until they are deleted; a new refusal no entry covers
+// fails Build.
+func TestBuildSignsWhatThePinnedCoreInstalls(t *testing.T) {
+	pub, key := testKey(t)
+	signed, held, err := clientportal.Build(key, nil)
+	if err != nil {
+		t.Fatalf("Build with a valid key: %v", err)
+	}
+	entries, err := clientportal.Pending()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range modulekit.Unused(entries, held) {
+		t.Errorf("pending.yaml: %s (%s) holds nothing back: the pinned core accepts it or the package no longer has it; delete the entry", p.Part(), p.Core)
+	}
+	for _, h := range held {
+		t.Log(h.String())
+	}
+	v, files := signedFiles(t, signed, pub)
+	if v.ModuleID != clientportal.ID || v.Version != "1.0.0" || v.Signer.KeyID != modulekit.KeyID(pub) {
+		t.Fatalf("verified %s %s by %s", v.ModuleID, v.Version, v.Signer.KeyID)
+	}
+	if _, ok := files[modulekit.PendingFile]; ok {
+		t.Error("the signed package ships pending.yaml")
+	}
+	if refs := modulekit.CheckAll(files); len(refs) != 0 {
+		t.Fatalf("the signed package's files are refused: %v", refs)
+	}
+	if _, ms, err := modulekit.Check(files); err != nil || len(ms) != 2 {
+		t.Fatalf("Check on the signed files: %d migrations, %v", len(ms), err)
 	}
 }
 
-// The package without the CORE-gated manifest fields passes the core's install check
-// today: manifest, migrations and everything else in it.
-func TestCoreMainVariantPassesCoreCheck(t *testing.T) {
-	if err := clientportal.Check(coremain.Edit); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := clientportal.Archive(coremain.Edit)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkg, ms, err := modulekit.CheckPackage(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pkg.Manifest.ID != clientportal.ID || len(ms) != 2 {
-		t.Fatalf("package = %s with %d migrations", pkg.Manifest.ID, len(ms))
-	}
-	if err := modulekit.CheckMigrations(pkg.Manifest, ms); err != nil {
-		t.Fatal(err)
-	}
+// Without its pending list the full package is refused, and only for parts the list
+// names: every refusal CheckAll reports is one some held part answers.
+func TestFullPackageRefusedOnlyForPendingParts(t *testing.T) {
 	files, err := clientportal.Files()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := modulekit.ParseManifest(coremain.Manifest(files[clientportal.ManifestFile])); err != nil {
-		t.Fatal(err)
+	delete(files, modulekit.PendingFile)
+	refs := modulekit.CheckAll(files)
+	if len(refs) == 0 {
+		t.Fatal("the pinned core accepts the full package: empty pending.yaml")
+	}
+	_, held, err := clientportal.Installable(nil)
+	if err != nil {
+		t.Fatalf("a refusal no pending entry covers: %v", err)
+	}
+	answered := map[string]bool{}
+	for _, h := range held {
+		for _, r := range h.Refusals {
+			answered[r.File+" "+r.Path+" "+r.Code] = true
+		}
+	}
+	for _, r := range refs {
+		if !answered[r.File+" "+r.Path+" "+r.Code] {
+			t.Errorf("refusal held by no pending part: %v", r)
+		}
+	}
+}
+
+// A refusal pending.yaml doesn't name stops the build.
+func TestBuildRefusesWhatPendingDoesNotName(t *testing.T) {
+	_, key := testKey(t)
+	_, _, err := clientportal.Build(key, func(f map[string][]byte) {
+		f[clientportal.ManifestFile] = append(f[clientportal.ManifestFile], []byte("unheard_of: true\n")...)
+	})
+	var refs modulekit.Refusals
+	if !errors.As(err, &refs) || len(refs) != 1 || refs[0].Code != modulekit.RefuseUnknownField || refs[0].Path != "unheard_of" {
+		t.Fatalf("Build with an unlisted field = %v, want one unknown_field refusal at unheard_of", err)
 	}
 }
 
@@ -146,7 +159,7 @@ func verify(t *testing.T, signed []byte, pub ed25519.PublicKey) (modulekit.Verif
 
 func TestBuildSignsAPackageTheCoreVerifies(t *testing.T) {
 	pub, key := testKey(t)
-	signed, err := clientportal.Build(key, coremain.Edit)
+	signed, _, err := clientportal.Build(key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +172,7 @@ func TestBuildSignsAPackageTheCoreVerifies(t *testing.T) {
 	}
 
 	// Archive then SignFile is the same signed package.
-	raw, err := clientportal.Archive(coremain.Edit)
+	raw, err := clientportal.Archive(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,19 +185,9 @@ func TestBuildSignsAPackageTheCoreVerifies(t *testing.T) {
 	}
 }
 
-func TestBuildFullPackageVerifies(t *testing.T) {
-	pub, key := testKey(t)
-	signed, err := clientportal.Build(key, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = verify(t, signed, pub)
-	skipIfPending(t, err)
-}
-
 func TestSignedPackageRefusesTamperAndStrangers(t *testing.T) {
 	pub, key := testKey(t)
-	signed, err := clientportal.Build(key, coremain.Edit)
+	signed, _, err := clientportal.Build(key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,14 +221,17 @@ func TestSignedPackageRefusesTamperAndStrangers(t *testing.T) {
 
 func TestBuildEditChangesOnlyTheCopy(t *testing.T) {
 	_, key := testKey(t)
-	if _, err := clientportal.Build(key, func(f map[string][]byte) { f["migrations/0001_messages.sql"] = []byte("-- changed") }); err != nil {
+	const mark = "\n-- changed\n"
+	if _, _, err := clientportal.Build(key, func(f map[string][]byte) {
+		f["migrations/0001_messages.sql"] = append(f["migrations/0001_messages.sql"], mark...)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	files, err := clientportal.Files()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(files["migrations/0001_messages.sql"]) == "-- changed" {
+	if strings.HasSuffix(string(files["migrations/0001_messages.sql"]), mark) {
 		t.Fatal("edit leaked into the embedded files")
 	}
 }

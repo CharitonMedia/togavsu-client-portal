@@ -1,6 +1,6 @@
 # A stand-in for the lawpay-docuseal module, for client-portal's acceptance suite only:
 # it publishes the three views client-portal reads and declares the pay and sign client
-# tabs. It never ships. The client tabs wait on CORE-10.
+# tabs. It never ships. The client tabs wait on CORE-10 (pending.yaml).
 id: lawpay-docuseal
 name: Payments and signing (test fixture)
 version: "0.0.1"
@@ -13,7 +13,6 @@ container:
   digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
   port: 8080
 tabs:
-  # CORE-10
   - id: pay
     title: Pay
     placement: client

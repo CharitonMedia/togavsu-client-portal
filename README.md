@@ -42,13 +42,13 @@ roles and attorney-only rules decide what each viewer sees. Its own tables live 
 
 ```
 cmd/client-portal/          serve and package subcommands
-package.go                  embedded package files; Archive, Check, Build, SignFile (pkg/modulekit)
+package.go                  embedded package files; Pending, Installable, Archive, Build, SignFile (pkg/modulekit)
 package/togavsu-module.yaml the manifest
 package/migrations/         0001_messages.sql, 0002_portal_state.sql
+package/pending.yaml        the parts that wait on a core change, each with its CORE item; never ships
 internal/portal/            the server: pages, JSON endpoints, templates, static files
 internal/coreapi/           the core API client
 internal/acceptance/        the acceptance suite on the real core (pkg/modulekit/coretest)
-internal/coremain/          test scaffolding: the package variant today's core main installs
 internal/fakecore/          an in-memory fake core for the fast suite
 internal/dbtest/            test database setup for the fake-core suite
 ```
@@ -75,31 +75,69 @@ skip, except under CI, where they fail. Two suites use it:
   coretest makes and removes its own database and roles per test. A criterion that needs
   a module-core item the core main lacks is written in full and skips naming the item
   (`needs CORE-NN`), so the suite turns green criterion by criterion as module-core
-  lands. Until CORE-03, CORE-04, CORE-08, CORE-10, CORE-14, CORE-18 and CORE-19 land,
-  the suite installs the variant `internal/coremain` derives: the manifest without the
-  fields and scopes the core main refuses.
+  lands. The suite installs the package the package command builds: the pending parts
+  the pinned core refuses held back (see Packaging and signing). Its lawpay-docuseal
+  fixture has its own `pending.yaml` for its two client tabs (CORE-10).
 - `internal/portal` runs every criterion against `internal/fakecore`, which serves the
   core API operations the module calls, including the module-core items, with the
   core's access rules. It creates a database named `togavsu_client_portal` and a role
   `togavsu_client_portal_mod`, and drops both when each test ends.
 
-The root package's tests run the core's checks on the package and the source:
-`TestCoreMainVariantPassesCoreCheck` runs the install check on the package without the
-pending fields, `TestFullManifestRefusedOnlyForPendingFields` shows the core main
-refuses the shipped manifest for each pending field in `internal/coremain` and nothing
-else (it fails once the core accepts one), and `TestSourcePassesCoreSettingsCheck` runs
+The root package's tests run the core's checks on the package and the source; see
+Packaging and signing for the package tests. `TestSourcePassesCoreSettingsCheck` runs
 `modulekit.CheckSource`, the core's settings source check (no environment reads, no
 numeric configuration literals outside settings). Fixed numbers in the source are
 spelled as arithmetic, as the core's matter-clock does, so the check can tell them from
-tunables. When module-core lands, `togavsu-module check package` passes on the package
-directory and returns to CI.
+tunables.
 
-`client-portal package -key signing.key -out client-portal.signed.json` reads a base64
-Ed25519 seed, runs the core's install check on the package through `pkg/modulekit`,
-refuses to sign what the core would refuse, writes the signed package file and prints
-the public key for the admin to add as a trusted signing key. Until the CORE items
-above land the check refuses the real manifest, as `togavsu-module check package` does.
-The manifest's image digest is a placeholder that the release workflow pins.
+## Packaging and signing
+
+The package directory is the full package: the manifest and migrations as the SPEC
+defines them, including the fields and scopes that wait on core items, plus
+`package/pending.yaml`. Each pending entry names one part (a manifest field path or a
+scope), the CORE item it waits on and one line on what it does. Today it holds back:
+
+| Part | CORE item |
+| --- | --- |
+| `client_home` | CORE-10 |
+| the five client tabs (`tabs[2]`, Dashboard to Account) | CORE-10 |
+| `tabs[*].params` | CORE-10 |
+| `sidebar[*].section`, `icon`, `order`, `badge` | CORE-08 |
+| `notifications` | CORE-03 |
+| scope `users:directory` | CORE-19 |
+| scope `firm:read` | CORE-18 |
+| scope `mail:send` | CORE-04 |
+| scopes `client_access:read`, `client_access:write` | CORE-14 |
+
+No migration waits on a core item. The client tabs are the last five in `tabs`, so the
+one entry `tabs[2]` holds back each in turn: the kit names list items by index, and
+each removal moves the next client tab to index 2. Keep them last.
+
+```sh
+go run ./cmd/client-portal package -key signing.key -out client-portal.signed.json
+# or, with the core's command:
+go run github.com/CharitonMedia/togavsu/cmd/togavsu-module package -installable -dir package -key signing.key -out client-portal.signed.json
+```
+
+The key file holds a base64 Ed25519 seed; keep the release key out of the repository.
+`package` builds with `modulekit.BuildInstallable`: it holds back each pending part the
+pinned core refuses, keeps each one the core accepts, prints one stderr line per held
+part with its CORE item (and one per entry that held nothing back), refuses to sign
+when the core refuses anything `pending.yaml` doesn't cover, writes the signed package
+file and prints the public key for the admin to add as a trusted signing key. When a
+CORE item lands its parts ship without any edit; delete its entries then.
+`go run github.com/CharitonMedia/togavsu/cmd/togavsu-module check -installable package`
+runs the same check without signing, as CI does. The manifest's image digest is a
+placeholder that the release workflow pins.
+
+`TestBuildSignsWhatThePinnedCoreInstalls` builds and signs with a key made at test time,
+verifies the signed file and runs `modulekit.CheckAll` and `modulekit.Check` on the
+files it carries, which must show no refusals and no `pending.yaml`. It fails when Build
+errors with that key, when an entry holds nothing back (the core accepts that part now:
+delete the entry) and, through Build, when the core refuses a part no entry covers.
+`TestFullPackageRefusedOnlyForPendingParts` checks every refusal of the full package is
+answered by a held part, and `TestBuildRefusesWhatPendingDoesNotName` that an unlisted
+refusal stops the build.
 
 ## Core requirements
 

@@ -7,8 +7,10 @@
 // togavsu_api_token, togavsu_db_role and togavsu_db_password. The module subscribes to
 // no events, so it reads no webhook secret.
 //
-// package checks the package with the core's install check and writes the signed
-// package file, both through the public module kit (pkg/modulekit).
+// package writes the signed package file the pinned core installs, through the public
+// module kit (pkg/modulekit.BuildInstallable): it holds back each part in
+// package/pending.yaml that the core refuses, prints one line per held part with the
+// CORE item it waits on, and refuses to sign when anything else is refused.
 package main
 
 import (
@@ -97,13 +99,21 @@ func pack(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Refuse to sign what the core would refuse to install.
-	if err := clientportal.Check(nil); err != nil {
-		log.Fatal(err)
-	}
-	signed, err := clientportal.Build(key, nil)
+	// Hold back the pending parts the pinned core refuses, and refuse to sign anything
+	// else the core would refuse to install.
+	signed, held, err := clientportal.Build(key, nil)
 	if err != nil {
 		log.Fatal(err)
+	}
+	for _, h := range held {
+		fmt.Fprintln(os.Stderr, h.String())
+	}
+	entries, err := clientportal.Pending()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, p := range modulekit.Unused(entries, held) {
+		fmt.Fprintf(os.Stderr, "pending %s (%s) holds nothing back: the core accepts it or the package no longer has it\n", p.Part(), p.Core)
 	}
 	if err := os.WriteFile(*out, signed, os.FileMode(zero)|0o644); err != nil {
 		log.Fatal(err)

@@ -1,0 +1,45 @@
+# Parts of this package that wait on a core change (CORE items in the core's
+# docs/modules/CORE-CHANGES.md; docs/SPEC.md section 9 says what each one adds).
+# The package command builds with modulekit.BuildInstallable, which holds back each
+# part below that the pinned core refuses and keeps each part the core accepts. This
+# file never ships.
+pending:
+  - field: client_home
+    core: CORE-10
+    reason: Name the Dashboard as the tab a client lands on at /portal.
+  - field: tabs[2]
+    core: CORE-10
+    reason: The client tabs (Dashboard, Documents, Invoices, Messages, Account) start at tabs[2]; each is held back in turn as the one before it goes.
+  - field: tabs[*].params
+    core: CORE-10
+    reason: Pass the matter, contact, status, thread and invoice query parameters through to a tab.
+  - field: sidebar[*].section
+    core: CORE-08
+    reason: File the Messages entry under Communications in the sidebar.
+  - field: sidebar[*].icon
+    core: CORE-08
+    reason: Show the message icon beside the Messages entry.
+  - field: sidebar[*].order
+    core: CORE-08
+    reason: Place the Messages entry within its sidebar section.
+  - field: sidebar[*].badge
+    core: CORE-08
+    reason: Count unread client messages beside the Messages entry.
+  - field: notifications
+    core: CORE-03
+    reason: Tell the matter team when a client writes or uploads.
+  - scope: users:directory
+    core: CORE-19
+    reason: Label each message with the staff member who wrote it.
+  - scope: firm:read
+    core: CORE-18
+    reason: Show the firm name, phone, email and portal colors to the client.
+  - scope: mail:send
+    core: CORE-04
+    reason: Email a client that the firm sent a message.
+  - scope: client_access:read
+    core: CORE-14
+    reason: Show each client's portal status on the matter.
+  - scope: client_access:write
+    core: CORE-14
+    reason: Grant, resend, reset and turn off portal access.

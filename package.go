@@ -1,8 +1,9 @@
 // Package clientportal is the Togavsu Client Portal module: the client's own portal
 // screens, the staff Messages inbox and the Portal access panel. This file holds the
-// package contents (manifest, migrations and help) and turns them into the core's
-// signed package file through the public module kit (pkg/modulekit), which runs the
-// core's own packaging, signing and install checks. The server is in internal/portal.
+// package contents (manifest, migrations, help and the pending list) and turns them
+// into the core's signed package file through the public module kit (pkg/modulekit),
+// which runs the core's own packaging, signing and install checks and holds back the
+// parts that wait on a core change. The server is in internal/portal.
 package clientportal
 
 import (
@@ -23,8 +24,9 @@ const ManifestFile = modulekit.ManifestFile
 //go:embed package
 var packageFS embed.FS
 
-// Files returns the package files (manifest and migrations) by package path, read
-// the way the kit reads a package directory on disk.
+// Files returns the package files (manifest, migrations and pending.yaml) by package
+// path, read the way the kit reads a package directory on disk. They are the full
+// package; Installable is what the pinned core installs.
 func Files() (map[string][]byte, error) {
 	sub, err := fs.Sub(packageFS, "package")
 	if err != nil {
@@ -53,39 +55,53 @@ func edited(edit func(map[string][]byte)) (map[string][]byte, error) {
 	return files, nil
 }
 
-// Archive returns the installable package (the gzip tar the core installs) built by
-// the kit from the package files. edit, when set, changes a copy of the files first.
-func Archive(edit func(map[string][]byte)) ([]byte, error) {
+// Pending reads the package's pending list (package/pending.yaml): the parts that wait
+// on a core change, each with its CORE item.
+func Pending() ([]modulekit.Pending, error) {
+	files, err := Files()
+	if err != nil {
+		return nil, err
+	}
+	return modulekit.ParsePending(files[modulekit.PendingFile])
+}
+
+// Installable returns the package files the pinned core accepts (modulekit.Installable):
+// the files without pending.yaml and without each pending part the core refuses, and
+// the parts it held back. A refusal no pending entry covers is an error. edit, when
+// set, changes a copy of the full files first.
+func Installable(edit func(map[string][]byte)) (map[string][]byte, []modulekit.Held, error) {
 	files, err := edited(edit)
+	if err != nil {
+		return nil, nil, err
+	}
+	return modulekit.Installable(files)
+}
+
+// Archive returns the installable package (the gzip tar the core installs) built by
+// the kit from Installable's files. edit, when set, changes a copy of the full files
+// first.
+func Archive(edit func(map[string][]byte)) ([]byte, error) {
+	files, _, err := Installable(edit)
 	if err != nil {
 		return nil, err
 	}
 	return modulekit.Archive(files)
 }
 
-// Check runs the core's install check over the package files, as the kit's Check
-// does. edit, when set, changes a copy of the files first.
-func Check(edit func(map[string][]byte)) error {
+// Build checks the package, holds back the pending parts the pinned core refuses and
+// signs the rest with key (modulekit.BuildInstallable), returning the signed package
+// file the admin installs and the parts it held back. edit, when set, changes a copy of
+// the full files first.
+func Build(key ed25519.PrivateKey, edit func(map[string][]byte)) ([]byte, []modulekit.Held, error) {
 	files, err := edited(edit)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	_, _, err = modulekit.Check(files)
-	return err
+	return modulekit.BuildInstallable(key, files)
 }
 
-// Build archives the package files and signs the archive with key, returning the
-// signed package file the admin installs (modulekit.Build). It does not run Check, so
-// a test can sign a package the core must refuse; the package command checks first.
-func Build(key ed25519.PrivateKey, edit func(map[string][]byte)) ([]byte, error) {
-	files, err := edited(edit)
-	if err != nil {
-		return nil, err
-	}
-	return modulekit.Build(key, files)
-}
-
-// SignFile signs an installable package built by Archive (modulekit.SignFile).
+// SignFile signs package bytes without checking them (modulekit.SignFile). Tests use
+// it to sign a package the core must refuse.
 func SignFile(key ed25519.PrivateKey, pkg []byte) ([]byte, error) {
 	return modulekit.SignFile(key, pkg)
 }

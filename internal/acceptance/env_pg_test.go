@@ -25,7 +25,6 @@ import (
 	"time"
 
 	clientportal "github.com/CharitonMedia/togavsu-client-portal"
-	"github.com/CharitonMedia/togavsu-client-portal/internal/coremain"
 	"github.com/CharitonMedia/togavsu-client-portal/internal/portal"
 	"github.com/CharitonMedia/togavsu/pkg/modulekit/coretest"
 )
@@ -65,8 +64,6 @@ type env struct {
 }
 
 // newEnv starts the core, installs and approves the package and makes the fixtures.
-// edit, when set, changes the package files before signing (the core-main variant is
-// always applied first; see internal/coremain).
 func newEnv(t *testing.T) *env {
 	t.Helper()
 	c := coretest.New(t)
@@ -105,15 +102,12 @@ func newEnv(t *testing.T) *env {
 	return e
 }
 
-// signed is the package signed with the suite's key: the core-main variant, then edit.
+// signed is the package the package command builds, signed with the suite's key: edit,
+// when set, changes a copy of the full package files, then the pending parts the pinned
+// core refuses are held back (package/pending.yaml).
 func (e *env) signed(edit func(map[string][]byte)) []byte {
 	e.t.Helper()
-	b, err := clientportal.Build(e.priv, func(f map[string][]byte) {
-		coremain.Edit(f)
-		if edit != nil {
-			edit(f)
-		}
-	})
+	b, _, err := clientportal.Build(e.priv, edit)
 	if err != nil {
 		e.t.Fatal(err)
 	}
