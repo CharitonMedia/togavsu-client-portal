@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/CharitonMedia/togavsu-client-portal/internal/coreapi"
@@ -423,21 +424,44 @@ func (s *Server) settings(ctx context.Context) (Settings, error) {
 
 // --- ids ---
 
-// newID returns a UUIDv7, matching core ids.
+// newID returns a UUIDv7, matching core ids. Ids made in the same millisecond carry a
+// rising counter in rand_a (RFC 9562 section 6.2, method 1), so messages written in one
+// millisecond keep their order.
 func newID(now time.Time) string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(err)
 	}
+	idMu.Lock()
 	ms := uint64(now.UnixMilli())
+	if ms <= idLastMS {
+		ms = idLastMS
+		idSeq++
+		if idSeq > 0x0fff {
+			ms++
+			idSeq = 0
+		}
+	} else {
+		idSeq = uint16(b[6]&0x07)<<8 | uint16(b[7])
+	}
+	idLastMS = ms
+	seq := idSeq
+	idMu.Unlock()
 	var ts [8]byte
 	binary.BigEndian.PutUint64(ts[:], ms)
 	copy(b[0:6], ts[2:8])
-	b[6] = (b[6] & 0x0f) | 0x70
+	b[6] = 0x70 | byte(seq>>8)&0x0f
+	b[7] = byte(seq)
 	b[8] = (b[8] & 0x3f) | 0x80
 	h := hex.EncodeToString(b[:])
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
 }
+
+var (
+	idMu     sync.Mutex
+	idLastMS uint64
+	idSeq    uint16
+)
 
 // validID reports a UUID-shaped id, so a guessed path segment never reaches the core
 // or the database as anything else.

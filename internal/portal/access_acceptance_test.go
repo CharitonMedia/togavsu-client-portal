@@ -222,7 +222,7 @@ func TestAccessAndIsolation(t *testing.T) {
 			t.Error("Sam's badge moved for an M4 message")
 		}
 		var out struct {
-			Hits []map[string]any `json:"hits"`
+			Hits []map[string]any `json:"data"`
 		}
 		r := e.get("/api/search?q=Zanzibar", sam)
 		want(t, r, http.StatusOK)

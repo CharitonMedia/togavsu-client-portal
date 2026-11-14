@@ -2,6 +2,7 @@ package portal
 
 import (
 	"testing"
+	"time"
 )
 
 func TestSniffType(t *testing.T) {
@@ -77,5 +78,17 @@ func TestSafeNext(t *testing.T) {
 		if got := safeNext(in); got != want {
 			t.Errorf("safeNext(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestNewIDKeepsOrderWithinAMillisecond(t *testing.T) {
+	now := time.Date(2026, 11, 2, 15, 0, 0, 0, time.UTC)
+	prev := newID(now)
+	for i := 0; i < 5000; i++ {
+		id := newID(now)
+		if !validID(id) || id <= prev || id[14] != '7' {
+			t.Fatalf("id %d: %s after %s", i, id, prev)
+		}
+		prev = id
 	}
 }
