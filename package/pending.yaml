@@ -7,9 +7,9 @@ pending:
   - field: client_home
     core: CORE-10
     reason: Name the Dashboard as the tab a client lands on at /portal.
-  - field: tabs[2]
+  - field: tabs[placement=client]
     core: CORE-10
-    reason: The client tabs (Dashboard, Documents, Invoices, Messages, Account) start at tabs[2]; each is held back in turn as the one before it goes.
+    reason: The client tabs (Dashboard, Documents, Invoices, Messages, Account), framed in the portal.
   - field: tabs[*].params
     core: CORE-10
     reason: Pass the matter, contact, status, thread and invoice query parameters through to a tab.

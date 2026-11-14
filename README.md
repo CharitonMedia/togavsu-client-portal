@@ -100,7 +100,7 @@ scope), the CORE item it waits on and one line on what it does. Today it holds b
 | Part | CORE item |
 | --- | --- |
 | `client_home` | CORE-10 |
-| the five client tabs (`tabs[2]`, Dashboard to Account) | CORE-10 |
+| the five client tabs (`tabs[placement=client]`, Dashboard to Account) | CORE-10 |
 | `tabs[*].params` | CORE-10 |
 | `sidebar[*].section`, `icon`, `order`, `badge` | CORE-08 |
 | `notifications` | CORE-03 |
@@ -109,9 +109,8 @@ scope), the CORE item it waits on and one line on what it does. Today it holds b
 | scope `mail:send` | CORE-04 |
 | scopes `client_access:read`, `client_access:write` | CORE-14 |
 
-No migration waits on a core item. The client tabs are the last five in `tabs`, so the
-one entry `tabs[2]` holds back each in turn: the kit names list items by index, and
-each removal moves the next client tab to index 2. Keep them last.
+No migration waits on a core item. Pending paths name the manifest as written, and the
+one entry `tabs[placement=client]` selects every client tab wherever it sits in `tabs`.
 
 ```sh
 go run ./cmd/client-portal package -key signing.key -out client-portal.signed.json

@@ -82,18 +82,14 @@ func signedFiles(t *testing.T, signed []byte, pub ed25519.PublicKey) (modulekit.
 // fails Build.
 func TestBuildSignsWhatThePinnedCoreInstalls(t *testing.T) {
 	pub, key := testKey(t)
-	signed, held, err := clientportal.Build(key, nil)
+	signed, ip, err := clientportal.Build(key, nil)
 	if err != nil {
 		t.Fatalf("Build with a valid key: %v", err)
 	}
-	entries, err := clientportal.Pending()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, p := range modulekit.Unused(entries, held) {
+	for _, p := range ip.Unused {
 		t.Errorf("pending.yaml: %s (%s) holds nothing back: the pinned core accepts it or the package no longer has it; delete the entry", p.Part(), p.Core)
 	}
-	for _, h := range held {
+	for _, h := range ip.Held {
 		t.Log(h.String())
 	}
 	v, files := signedFiles(t, signed, pub)
@@ -123,12 +119,12 @@ func TestFullPackageRefusedOnlyForPendingParts(t *testing.T) {
 	if len(refs) == 0 {
 		t.Fatal("the pinned core accepts the full package: empty pending.yaml")
 	}
-	_, held, err := clientportal.Installable(nil)
+	ip, err := clientportal.Installable(nil)
 	if err != nil {
 		t.Fatalf("a refusal no pending entry covers: %v", err)
 	}
 	answered := map[string]bool{}
-	for _, h := range held {
+	for _, h := range ip.Held {
 		for _, r := range h.Refusals {
 			answered[r.File+" "+r.Path+" "+r.Code] = true
 		}

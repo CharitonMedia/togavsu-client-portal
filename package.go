@@ -65,14 +65,15 @@ func Pending() ([]modulekit.Pending, error) {
 	return modulekit.ParsePending(files[modulekit.PendingFile])
 }
 
-// Installable returns the package files the pinned core accepts (modulekit.Installable):
-// the files without pending.yaml and without each pending part the core refuses, and
-// the parts it held back. A refusal no pending entry covers is an error. edit, when
-// set, changes a copy of the full files first.
-func Installable(edit func(map[string][]byte)) (map[string][]byte, []modulekit.Held, error) {
+// Installable returns what the pinned core accepts (modulekit.Installable): the files
+// without pending.yaml and without each pending part the core refuses, the parts it
+// held back, the pending list and the entries that held nothing back. A refusal no
+// pending entry covers is an error. edit, when set, changes a copy of the full files
+// first.
+func Installable(edit func(map[string][]byte)) (modulekit.InstallablePackage, error) {
 	files, err := edited(edit)
 	if err != nil {
-		return nil, nil, err
+		return modulekit.InstallablePackage{}, err
 	}
 	return modulekit.Installable(files)
 }
@@ -81,21 +82,21 @@ func Installable(edit func(map[string][]byte)) (map[string][]byte, []modulekit.H
 // the kit from Installable's files. edit, when set, changes a copy of the full files
 // first.
 func Archive(edit func(map[string][]byte)) ([]byte, error) {
-	files, _, err := Installable(edit)
+	ip, err := Installable(edit)
 	if err != nil {
 		return nil, err
 	}
-	return modulekit.Archive(files)
+	return modulekit.Archive(ip.Files)
 }
 
 // Build checks the package, holds back the pending parts the pinned core refuses and
 // signs the rest with key (modulekit.BuildInstallable), returning the signed package
-// file the admin installs and the parts it held back. edit, when set, changes a copy of
-// the full files first.
-func Build(key ed25519.PrivateKey, edit func(map[string][]byte)) ([]byte, []modulekit.Held, error) {
+// file the admin installs and Installable's result (the parts it held back and the
+// unused entries). edit, when set, changes a copy of the full files first.
+func Build(key ed25519.PrivateKey, edit func(map[string][]byte)) ([]byte, modulekit.InstallablePackage, error) {
 	files, err := edited(edit)
 	if err != nil {
-		return nil, nil, err
+		return nil, modulekit.InstallablePackage{}, err
 	}
 	return modulekit.BuildInstallable(key, files)
 }

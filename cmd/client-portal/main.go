@@ -101,18 +101,14 @@ func pack(args []string) {
 	}
 	// Hold back the pending parts the pinned core refuses, and refuse to sign anything
 	// else the core would refuse to install.
-	signed, held, err := clientportal.Build(key, nil)
+	signed, ip, err := clientportal.Build(key, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, h := range held {
+	for _, h := range ip.Held {
 		fmt.Fprintln(os.Stderr, h.String())
 	}
-	entries, err := clientportal.Pending()
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, p := range modulekit.Unused(entries, held) {
+	for _, p := range ip.Unused {
 		fmt.Fprintf(os.Stderr, "pending %s (%s) holds nothing back: the core accepts it or the package no longer has it\n", p.Part(), p.Core)
 	}
 	if err := os.WriteFile(*out, signed, os.FileMode(zero)|0o644); err != nil {
