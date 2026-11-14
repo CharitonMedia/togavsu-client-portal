@@ -15,17 +15,27 @@ jobs:
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-retries 20
     env:
+      # A superuser URL: coretest creates a database and roles per test, and dbtest
+      # creates togavsu_client_portal and its module role.
       TOGAVSU_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+      GOPRIVATE: github.com/CharitonMedia
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
       - run: go vet ./...
-      - run: go test ./...
+      - name: Wait for Postgres
+        run: until pg_isready -h 127.0.0.1 -p 5432; do sleep 1; done
+      - run: go test -race -timeout 0 ./...
+      # The pinned core's install check on the package, as the marketplace checks it:
+      # the parts in package/pending.yaml held back (each waits on a CORE item). It
+      # fails on any refusal pending.yaml doesn't cover, and (-strict) on an entry that
+      # holds nothing back once its CORE item has landed.
+      - run: go run github.com/CharitonMedia/togavsu/cmd/togavsu-module check -installable -strict package
       - run: docker build -t togavsu-client-portal .

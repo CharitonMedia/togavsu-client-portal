@@ -1,0 +1,10 @@
+# Parts of the lawpay-docuseal test fixture that wait on a core change. The suite
+# builds the fixture with modulekit.BuildInstallable, which holds back each part below
+# that the pinned core refuses.
+pending:
+  - field: tabs[id=pay]
+    core: CORE-10
+    reason: The Pay client tab, kept out of the portal nav, that Pay links open.
+  - field: tabs[id=sign]
+    core: CORE-10
+    reason: The Sign client tab, kept out of the portal nav, that Sign links open.

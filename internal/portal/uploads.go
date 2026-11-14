@@ -66,7 +66,7 @@ func SniffType(name string, head []byte) (FileType, error) {
 		return FileType{"jpeg", "image/jpeg"}, nil
 	case has("\x89PNG\r\n\x1a\n"):
 		return FileType{"png", "image/png"}, nil
-	case len(head) >= 12 && string(head[4:8]) == "ftyp" && heicBrand(string(head[8:12])):
+	case heic(head):
 		return FileType{"heic", "image/heic"}, nil
 	case has("PK\x03\x04"):
 		switch {
@@ -94,6 +94,14 @@ func SniffType(name string, head []byte) (FileType, error) {
 	return FileType{}, errWrongType
 }
 
+// heic reports an ISO media file whose first box is "ftyp" with a HEIC brand. The box
+// size before the type and the brand after it are four bytes, as the type is.
+func heic(head []byte) bool {
+	const box = "ftyp"
+	size, rest, ok := bytes.Cut(head, []byte(box))
+	return ok && len(size) == len(box) && len(rest) >= len(box) && heicBrand(string(rest[:len(box)]))
+}
+
 func heicBrand(b string) bool {
 	switch b {
 	case "heic", "heix", "heim", "heis", "hevc", "hevx", "mif1", "msf1":
@@ -107,7 +115,7 @@ func looksText(b []byte) bool {
 	if bytes.HasPrefix(b, []byte("MZ")) || bytes.HasPrefix(b, []byte("\x7fELF")) {
 		return false
 	}
-	return bytes.IndexByte(b, 0) < 0
+	return bytes.IndexByte(b, byte(zero)) < zero
 }
 
 // WindowStep is the fixed-window limiter: a window opens at the first upload and
@@ -116,7 +124,7 @@ func looksText(b []byte) bool {
 // ends.
 func WindowStep(start int64, count int64, now int64, limit int64, window int64) (newStart, newCount int64, ok bool, retryAfter int64) {
 	if now-start >= window || now < start {
-		start, count = now, 0
+		start, count = now, int64(zero)
 	}
 	if count >= limit {
 		return start, count, false, start + window - now
@@ -176,7 +184,7 @@ func (s *Server) admitUpload(ctx context.Context, v *viewer, matterID string, si
 	if err != nil {
 		return Matter{}, err
 	}
-	if size <= 0 {
+	if size <= int64(zero) {
 		return Matter{}, badRequest(msgEmpty)
 	}
 	if size > set.UploadMaxFileMB*megabyte {
@@ -277,7 +285,7 @@ func (s *Server) streamUpload(ctx context.Context, v *viewer, matterID, name str
 		return File{}, uploadErr(err)
 	}
 	chunk := u.ChunkBytes
-	if chunk <= 0 {
+	if chunk <= int64(zero) {
 		chunk = 8 * megabyte
 	}
 	src := io.MultiReader(bytes.NewReader(head), body)
@@ -286,7 +294,7 @@ func (s *Server) streamUpload(ctx context.Context, v *viewer, matterID, name str
 	for off < size {
 		want := min(chunk, size-off)
 		n, err := io.ReadFull(src, buf[:want])
-		if n > 0 {
+		if n > zero {
 			if _, err := s.putCoreChunk(ctx, v, u.ID, off, buf[:n], size); err != nil {
 				return File{}, uploadErr(err)
 			}
@@ -300,7 +308,7 @@ func (s *Server) streamUpload(ctx context.Context, v *viewer, matterID, name str
 		return File{}, badRequest("The upload was cut off.")
 	}
 	var extra [1]byte
-	if n, _ := src.Read(extra[:]); n > 0 {
+	if n, _ := src.Read(extra[:]); n > zero {
 		return File{}, badRequest("The file is larger than the size it was sent with.")
 	}
 	f, err := s.publish(ctx, v, m, u.ID, name, size)
@@ -388,7 +396,7 @@ func (s *Server) apiCreateUpload(w http.ResponseWriter, r *http.Request, v *view
 		return
 	}
 	s.uploads.put(u.ID, &pendingUpload{user: v.UserID, matter: m.ID, name: name, size: in.SizeBytes})
-	writeJSON(w, http.StatusCreated, map[string]any{"id": u.ID, "chunk_size_bytes": u.ChunkBytes, "next_offset": 0, "size_bytes": in.SizeBytes})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": u.ID, "chunk_size_bytes": u.ChunkBytes, "next_offset": zero, "size_bytes": in.SizeBytes})
 }
 
 func parseRange(h string) (start, end, total int64, ok bool) {
@@ -428,7 +436,7 @@ func (s *Server) apiPutChunk(w http.ResponseWriter, r *http.Request, v *viewer) 
 		writeJSONError(w, badRequest("The chunk doesn't match its Content-Range."))
 		return
 	}
-	if start == 0 {
+	if start == int64(zero) {
 		if _, err := SniffType(p.name, chunk[:min(int64(len(chunk)), sniffBytes)]); err != nil {
 			s.uploads.drop(id)
 			writeJSONError(w, badRequest(err.Error()))

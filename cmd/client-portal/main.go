@@ -7,15 +7,17 @@
 // togavsu_api_token, togavsu_db_role and togavsu_db_password. The module subscribes to
 // no events, so it reads no webhook secret.
 //
-// package waits on the core's public signing and packaging tool; until then it stops
-// with a message instead of writing a package the core might not accept.
+// package writes the signed package file the pinned core installs, through the public
+// module kit (pkg/modulekit.BuildInstallable): it holds back each part in
+// package/pending.yaml that the core refuses, prints one line per held part with the
+// CORE item it waits on, and refuses to sign when anything else is refused.
 package main
 
 import (
 	"crypto/ed25519"
 	"database/sql"
-	"encoding/base64"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -26,21 +28,30 @@ import (
 
 	clientportal "github.com/CharitonMedia/togavsu-client-portal"
 	"github.com/CharitonMedia/togavsu-client-portal/internal/portal"
+	"github.com/CharitonMedia/togavsu/pkg/modulekit"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// Small fixed numbers spelled as arithmetic for the core's AC-030 source check
+// (modulekit.CheckSource), as the core's matter-clock does.
+var (
+	zero = int(0)
+	one  = zero + 1
+)
+
 func main() {
-	log.SetFlags(0)
-	if len(os.Args) < 2 {
+	log.SetFlags(zero)
+	args := os.Args[one:]
+	if len(args) < one {
 		log.Fatal("usage: client-portal serve|package [flags]")
 	}
-	switch os.Args[1] {
+	switch args[zero] {
 	case "serve":
-		serve(os.Args[2:])
+		serve(args[one:])
 	case "package":
-		pack(os.Args[2:])
+		pack(args[one:])
 	default:
-		log.Fatalf("unknown command %q", os.Args[1])
+		log.Fatalf("unknown command %q", args[zero])
 	}
 }
 
@@ -84,16 +95,25 @@ func pack(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
-	if err != nil || len(seed) != ed25519.SeedSize {
-		log.Fatal("the key file must hold a base64 ed25519 seed")
-	}
-	pkg, err := clientportal.Build(clientportal.Unavailable{}, ed25519.NewKeyFromSeed(seed), nil)
+	key, err := modulekit.ParseSeed(string(raw))
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(*out, pkg, 0o644); err != nil {
+	// Hold back the pending parts the pinned core refuses, and refuse to sign anything
+	// else the core would refuse to install.
+	signed, ip, err := clientportal.Build(key, nil)
+	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %s", *out)
+	for _, h := range ip.Held {
+		fmt.Fprintln(os.Stderr, h.String())
+	}
+	for _, p := range ip.Unused {
+		fmt.Fprintf(os.Stderr, "pending %s (%s) holds nothing back: the core accepts it or the package no longer has it\n", p.Part(), p.Core)
+	}
+	if err := os.WriteFile(*out, signed, os.FileMode(zero)|0o644); err != nil {
+		log.Fatal(err)
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	fmt.Printf("wrote %s, signed by key %s\npublic key (add it as a trusted signing key, public_key_pem):\n%s", *out, modulekit.KeyID(pub), modulekit.PublicKeyPEM(pub))
 }

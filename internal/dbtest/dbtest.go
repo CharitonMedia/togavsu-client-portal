@@ -5,8 +5,8 @@
 // module's migrations applied as that role.
 //
 // It uses only the togavsu_client_portal database, which it creates beside the database
-// named in TOGAVSU_TEST_DATABASE_URL when missing. Without that variable the tests that
-// need Postgres skip, except under CI, where they fail.
+// in the superuser URL the test passes (the test reads TOGAVSU_TEST_DATABASE_URL), and
+// drops with the module role when the test ends.
 package dbtest
 
 import (
@@ -16,7 +16,6 @@ import (
 	"encoding/hex"
 	"io/fs"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -45,21 +44,6 @@ type DB struct {
 	Module *sql.DB
 }
 
-func baseURL(t testing.TB) *url.URL {
-	raw := os.Getenv("TOGAVSU_TEST_DATABASE_URL")
-	if raw == "" {
-		if os.Getenv("CI") != "" {
-			t.Fatal("TOGAVSU_TEST_DATABASE_URL is not set")
-		}
-		t.Skip("TOGAVSU_TEST_DATABASE_URL is not set")
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
-}
-
 func open(t testing.TB, u url.URL) *sql.DB {
 	d, err := sql.Open("pgx", u.String())
 	if err != nil {
@@ -71,12 +55,24 @@ func open(t testing.TB, u url.URL) *sql.DB {
 
 func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
 
-// New resets the core stand-in and the module schema and applies the migrations.
-func New(t testing.TB) *DB {
+// New resets the core stand-in and the module schema and applies the migrations, on
+// the server that serverURL, a Postgres superuser URL, names.
+func New(t testing.TB, serverURL string) *DB {
 	t.Helper()
 	ctx := context.Background()
-	u := baseURL(t)
+	u, err := url.Parse(serverURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := open(t, *u)
+	// Registered before the pools below, so it runs after they are closed.
+	t.Cleanup(func() {
+		for _, st := range []string{`DROP DATABASE IF EXISTS ` + Database + ` WITH (FORCE)`, `DROP ROLE IF EXISTS ` + quote(Role)} {
+			if _, err := server.ExecContext(ctx, st); err != nil {
+				t.Errorf("%s: %v", st, err)
+			}
+		}
+	})
 	var exists bool
 	if err := server.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, Database).Scan(&exists); err != nil {
 		t.Fatal(err)
@@ -90,9 +86,9 @@ func New(t testing.TB) *DB {
 	du.Path = "/" + Database
 	admin := open(t, du)
 
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	password := hex.EncodeToString(b)
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	password := hex.EncodeToString(b[:])
 	var roleExists bool
 	if err := admin.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, Role).Scan(&roleExists); err != nil {
 		t.Fatal(err)

@@ -1,14 +1,9 @@
 // Package clientportal is the Togavsu Client Portal module: the client's own portal
 // screens, the staff Messages inbox and the Portal access panel. This file holds the
-// package contents (manifest, migrations and help) and the seam where they become a
-// signed package. The server is in internal/portal.
-//
-// Packaging and signing belong to the core: the package archive format, the manifest
-// check and the Ed25519 signed package file are what the core verifies at install, and
-// they live in the core's internal packages, which another Go module can't import. A
-// copy here would drift from what the core checks, so the module doesn't carry one.
-// Build takes a Packager; until the core publishes a public packaging and signing
-// package or CLI, the only Packager here is Unavailable, which refuses.
+// package contents (manifest, migrations, help and the pending list) and turns them
+// into the core's signed package file through the public module kit (pkg/modulekit),
+// which runs the core's own packaging, signing and install checks and holds back the
+// parts that wait on a core change. The server is in internal/portal.
 package clientportal
 
 import (
@@ -16,67 +11,98 @@ import (
 	"embed"
 	"errors"
 	"io/fs"
-	"strings"
+
+	"github.com/CharitonMedia/togavsu/pkg/modulekit"
 )
 
 // ID is the module id from the manifest.
 const ID = "client-portal"
 
 // ManifestFile is the manifest's name inside a package.
-const ManifestFile = "togavsu-module.yaml"
+const ManifestFile = modulekit.ManifestFile
 
 //go:embed package
 var packageFS embed.FS
 
-// Files returns the package files (manifest and migrations) by package path.
+// Files returns the package files (manifest, migrations and pending.yaml) by package
+// path, read the way the kit reads a package directory on disk. They are the full
+// package; Installable is what the pinned core installs.
 func Files() (map[string][]byte, error) {
-	out := map[string][]byte{}
-	err := fs.WalkDir(packageFS, "package", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		b, err := packageFS.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		out[strings.TrimPrefix(p, "package/")] = b
-		return nil
-	})
-	return out, err
-}
-
-// Packager turns package files into the core's signed package file, signed with key.
-// The core's public packaging and signing tool will implement it.
-type Packager interface {
-	Package(files map[string][]byte, key ed25519.PrivateKey) ([]byte, error)
-}
-
-// ErrNoPackager means no core packaging and signing tool is wired in yet.
-var ErrNoPackager = errors.New("client-portal: packaging and signing wait on the core's public signing and packaging tool")
-
-// Unavailable is the stub Packager used until the core's tool exists. It refuses.
-type Unavailable struct{}
-
-// Package refuses with ErrNoPackager.
-func (Unavailable) Package(map[string][]byte, ed25519.PrivateKey) ([]byte, error) {
-	return nil, ErrNoPackager
-}
-
-// Build hands the package files to p to package and sign with key. edit, when set,
-// changes the files first (tests use it to make tampered and changed variants).
-func Build(p Packager, key ed25519.PrivateKey, edit func(map[string][]byte)) ([]byte, error) {
-	files, err := Files()
+	sub, err := fs.Sub(packageFS, "package")
+	if err != nil {
+		return nil, err
+	}
+	files, err := modulekit.Files(sub)
 	if err != nil {
 		return nil, err
 	}
 	if _, ok := files[ManifestFile]; !ok {
 		return nil, errors.New("client-portal: the package has no " + ManifestFile)
 	}
+	return files, nil
+}
+
+// edited returns the package files with edit applied to a copy. Tests use edit to
+// make tampered and changed variants.
+func edited(edit func(map[string][]byte)) (map[string][]byte, error) {
+	files, err := Files()
+	if err != nil {
+		return nil, err
+	}
 	if edit != nil {
 		edit(files)
 	}
-	if p == nil {
-		p = Unavailable{}
+	return files, nil
+}
+
+// Pending reads the package's pending list (package/pending.yaml): the parts that wait
+// on a core change, each with its CORE item.
+func Pending() ([]modulekit.Pending, error) {
+	files, err := Files()
+	if err != nil {
+		return nil, err
 	}
-	return p.Package(files, key)
+	return modulekit.ParsePending(files[modulekit.PendingFile])
+}
+
+// Installable returns what the pinned core accepts (modulekit.Installable): the files
+// without pending.yaml and without each pending part the core refuses, the parts it
+// held back, the pending list and the entries that held nothing back. A refusal no
+// pending entry covers is an error. edit, when set, changes a copy of the full files
+// first.
+func Installable(edit func(map[string][]byte)) (modulekit.InstallablePackage, error) {
+	files, err := edited(edit)
+	if err != nil {
+		return modulekit.InstallablePackage{}, err
+	}
+	return modulekit.Installable(files)
+}
+
+// Archive returns the installable package (the gzip tar the core installs) built by
+// the kit from Installable's files. edit, when set, changes a copy of the full files
+// first.
+func Archive(edit func(map[string][]byte)) ([]byte, error) {
+	ip, err := Installable(edit)
+	if err != nil {
+		return nil, err
+	}
+	return modulekit.Archive(ip.Files)
+}
+
+// Build checks the package, holds back the pending parts the pinned core refuses and
+// signs the rest with key (modulekit.BuildInstallable), returning the signed package
+// file the admin installs and Installable's result (the parts it held back and the
+// unused entries). edit, when set, changes a copy of the full files first.
+func Build(key ed25519.PrivateKey, edit func(map[string][]byte)) ([]byte, modulekit.InstallablePackage, error) {
+	files, err := edited(edit)
+	if err != nil {
+		return nil, modulekit.InstallablePackage{}, err
+	}
+	return modulekit.BuildInstallable(key, files)
+}
+
+// SignFile signs package bytes without checking them (modulekit.SignFile). Tests use
+// it to sign a package the core must refuse.
+func SignFile(key ed25519.PrivateKey, pkg []byte) ([]byte, error) {
+	return modulekit.SignFile(key, pkg)
 }

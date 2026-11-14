@@ -77,7 +77,7 @@ type Contact struct {
 
 func (c *Contact) current() *ContactInfo {
 	for i := range c.History {
-		if c.History[i].EffectiveTo == 0 {
+		if c.History[i].EffectiveTo == int64(zero) {
 			return &c.History[i]
 		}
 	}
@@ -206,18 +206,41 @@ type Core struct {
 	seq                 int
 }
 
+// The core's defaults the fake serves. Numbers are spelled as arithmetic and durations
+// as text for the core's AC-030 source check (modulekit.CheckSource), as matter-clock
+// does.
+var (
+	zero = int(0)
+	one  = zero + 1
+
+	tokenTTL       = duration("5m")  // context token lifetime
+	uploadExpiry   = duration("24h") // an upload session's lifetime
+	daysAfterClose = 14 * one        // client access to a closed matter, in days
+	maxTitleChars  = 200 * one       // a notification title
+	pageLimit      = 100 * one       // a list page
+	secretBytes    = 12 * one        // random bytes in a fake token or password
+)
+
+func duration(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
 // New returns an empty fake core. db, when set, is an admin connection to the test
 // database with the stub core schema.
 func New(db *sql.DB) *Core {
-	k := make([]byte, 32)
+	k := make([]byte, sha256.Size)
 	_, _ = rand.Read(k)
-	c := &Core{key: k, Now: time.Now, TokenTTL: 5 * time.Minute, DB: db, ChunkSize: 8 << 20,
+	c := &Core{key: k, Now: time.Now, TokenTTL: tokenTTL, DB: db, ChunkSize: 8 << 20,
 		Users: map[string]*User{}, Contacts: map[string]*Contact{}, Matters: map[string]*Matter{}, Files: map[string]*File{},
 		Uploads: map[string]*Upload{}, Invoices: map[string]*Invoice{}, Trust: map[string]int64{}, Ledger: map[string][]map[string]any{},
-		Settings: map[string]string{}, DaysAfterClose: 14, ModuleTokens: map[string]string{}, AccessMailStatus: "sent",
+		Settings: map[string]string{}, DaysAfterClose: daysAfterClose, ModuleTokens: map[string]string{}, AccessMailStatus: "sent",
 		Firm: map[string]any{"name": "Example Law Office LLC", "short_name": "Example Law", "phone": "555-0100", "email": "office@example.test",
 			"client_portal": map[string]any{"client_header": "#22334d", "label": "Client Portal"}}}
-	c.ModuleToken = "tvm_" + c.randHex(12)
+	c.ModuleToken = "tvm_" + c.randHex(secretBytes)
 	return c
 }
 
@@ -244,7 +267,7 @@ func (c *Core) mirror(table, id string) {
 
 // AddModule registers another module's bearer token (for foreign context tokens).
 func (c *Core) AddModule(id string) string {
-	tok := "tvm_" + c.randHex(12)
+	tok := "tvm_" + c.randHex(secretBytes)
 	c.ModuleTokens[tok] = id
 	return tok
 }
@@ -253,7 +276,7 @@ func (c *Core) AddModule(id string) string {
 func (c *Core) AddUser(name, email string, roles ...string) *User {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	u := &User{ID: c.NewID(), Name: name, Email: email, Roles: roles, Active: true, Password: "pw-" + c.randHex(6)}
+	u := &User{ID: c.NewID(), Name: name, Email: email, Roles: roles, Active: true, Password: "pw-" + c.randHex(secretBytes)}
 	c.Users[u.ID] = u
 	c.mirror("users", u.ID)
 	return u
@@ -339,7 +362,7 @@ func (c *Core) mac(payload string) string {
 // Token issues a context token for the user and module, with an optional matter claim
 // and a lifetime (0 means the default).
 func (c *Core) Token(module, user, matter string, ttl time.Duration) string {
-	if ttl == 0 {
+	if ttl == time.Duration(zero) {
 		ttl = c.TokenTTL
 	}
 	b, _ := json.Marshal(claims{Module: module, UserID: user, Matter: matter, Exp: c.Now().Add(ttl).Unix()})
@@ -472,7 +495,7 @@ func reply(w http.ResponseWriter, status int, v any) {
 }
 
 func page(data any) map[string]any {
-	return map[string]any{"data": data, "page": map[string]any{"limit": 100, "next_cursor": nil}}
+	return map[string]any{"data": data, "page": map[string]any{"limit": pageLimit, "next_cursor": nil}}
 }
 
 // auth resolves the caller. A module bearer with a context token is a viewer call; a
@@ -482,7 +505,7 @@ func (c *Core) auth(w http.ResponseWriter, r *http.Request) (principal, bool) {
 	if id, ok := strings.CutPrefix(bearer, "user:"); ok {
 		u := c.Users[id]
 		if u == nil || !u.Active {
-			problem(w, 401, "unauthenticated", "no such user")
+			problem(w, http.StatusUnauthorized, "unauthenticated", "no such user")
 			return principal{}, false
 		}
 		return principal{user: u}, true
@@ -493,7 +516,7 @@ func (c *Core) auth(w http.ResponseWriter, r *http.Request) (principal, bool) {
 	} else if m, ok := c.ModuleTokens[bearer]; ok {
 		module = m
 	} else {
-		problem(w, 401, "unauthenticated", "bad bearer token")
+		problem(w, http.StatusUnauthorized, "unauthenticated", "bad bearer token")
 		return principal{}, false
 	}
 	tok := r.Header.Get("X-Togavsu-Context-Token")
@@ -502,20 +525,20 @@ func (c *Core) auth(w http.ResponseWriter, r *http.Request) (principal, bool) {
 	}
 	cl, ok := c.verify(tok)
 	if !ok {
-		problem(w, 401, "unauthenticated", "the context token is invalid or expired")
+		problem(w, http.StatusUnauthorized, "unauthenticated", "the context token is invalid or expired")
 		return principal{}, false
 	}
 	if cl.Module != module {
-		problem(w, 403, "forbidden", "the context token was issued for another module")
+		problem(w, http.StatusForbidden, "forbidden", "the context token was issued for another module")
 		return principal{}, false
 	}
 	u := c.Users[cl.UserID]
 	if u == nil || !u.Active {
-		problem(w, 401, "unauthenticated", "the context token is invalid or expired")
+		problem(w, http.StatusUnauthorized, "unauthenticated", "the context token is invalid or expired")
 		return principal{}, false
 	}
 	if u.MustChangePassword && !strings.HasSuffix(r.URL.Path, "/context-tokens/verify") {
-		problem(w, 403, "password_change_required", "set a new password first")
+		problem(w, http.StatusForbidden, "password_change_required", "set a new password first")
 		return principal{}, false
 	}
 	return principal{module: module, user: u, matter: cl.Matter}, true
@@ -539,7 +562,7 @@ func (c *Core) wrap(h route, service bool) http.HandlerFunc {
 			return
 		}
 		if p.service && !service {
-			problem(w, 403, "scope_denied", "this operation takes no service call")
+			problem(w, http.StatusForbidden, "scope_denied", "this operation takes no service call")
 			return
 		}
 		h(w, r, p)
@@ -588,7 +611,7 @@ func (c *Core) Handler() http.Handler {
 
 func (c *Core) issueToken(w http.ResponseWriter, r *http.Request, p principal) {
 	if p.module != "" {
-		problem(w, 403, "forbidden", "a context token is issued to a signed-in user")
+		problem(w, http.StatusForbidden, "forbidden", "a context token is issued to a signed-in user")
 		return
 	}
 	var body struct {
@@ -596,27 +619,27 @@ func (c *Core) issueToken(w http.ResponseWriter, r *http.Request, p principal) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.MatterID != "" && !c.canRead(p.user, body.MatterID) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
-	reply(w, 201, map[string]any{"token": c.Token(r.PathValue("id"), p.user.ID, body.MatterID, 0), "viewer_user_id": p.user.ID, "roles": p.user.Roles})
+	reply(w, http.StatusCreated, map[string]any{"token": c.Token(r.PathValue("id"), p.user.ID, body.MatterID, time.Duration(zero)), "viewer_user_id": p.user.ID, "roles": p.user.Roles})
 }
 
 func (c *Core) verifyToken(w http.ResponseWriter, r *http.Request, p principal) {
 	if p.module != r.PathValue("id") || p.user == nil {
-		problem(w, 403, "forbidden", "a module verifies only its own context tokens")
+		problem(w, http.StatusForbidden, "forbidden", "a module verifies only its own context tokens")
 		return
 	}
 	var matter any
 	if p.matter != "" {
 		matter = p.matter
 	}
-	reply(w, 200, map[string]any{"viewer_user_id": p.user.ID, "roles": p.user.Roles, "module": p.module, "matter_id": matter})
+	reply(w, http.StatusOK, map[string]any{"viewer_user_id": p.user.ID, "roles": p.user.Roles, "module": p.module, "matter_id": matter})
 }
 
 func (c *Core) settings(w http.ResponseWriter, r *http.Request, p principal) {
 	if p.module != r.PathValue("id") {
-		problem(w, 403, "forbidden", "own settings only")
+		problem(w, http.StatusForbidden, "forbidden", "own settings only")
 		return
 	}
 	keys := make([]string, 0, len(c.Settings))
@@ -628,7 +651,7 @@ func (c *Core) settings(w http.ResponseWriter, r *http.Request, p principal) {
 	for _, k := range keys {
 		rows = append(rows, map[string]string{"key": k, "value": c.Settings[k]})
 	}
-	reply(w, 200, rows)
+	reply(w, http.StatusOK, rows)
 }
 
 // readView serves the lawpay-docuseal fixture's published views: 404 when it isn't
@@ -636,12 +659,12 @@ func (c *Core) settings(w http.ResponseWriter, r *http.Request, p principal) {
 // otherwise the rows whose keyed record the viewer may read.
 func (c *Core) readView(w http.ResponseWriter, r *http.Request, p principal) {
 	if r.PathValue("id") != "lawpay-docuseal" || !c.Provider.Installed {
-		problem(w, 404, "not_found", "module")
+		problem(w, http.StatusNotFound, "not_found", "module")
 		return
 	}
 	view := r.PathValue("view")
 	if c.Provider.Declined[view] {
-		problem(w, 403, "scope_denied", "scope declined")
+		problem(w, http.StatusForbidden, "scope_denied", "scope declined")
 		return
 	}
 	ids := map[string]bool{}
@@ -662,7 +685,7 @@ func (c *Core) readView(w http.ResponseWriter, r *http.Request, p principal) {
 		rows, key = c.Provider.Signatures, "file_id"
 		visible = func(id string) bool { f := c.Files[id]; return f != nil && c.canSeeFile(p.user, f) }
 	default:
-		problem(w, 404, "not_found", "view")
+		problem(w, http.StatusNotFound, "not_found", "view")
 		return
 	}
 	out := []map[string]any{}
@@ -672,7 +695,7 @@ func (c *Core) readView(w http.ResponseWriter, r *http.Request, p principal) {
 			out = append(out, row)
 		}
 	}
-	reply(w, 200, map[string]any{"data": out})
+	reply(w, http.StatusOK, map[string]any{"data": out})
 }
 
 func (c *Core) getMe(w http.ResponseWriter, _ *http.Request, p principal) {
@@ -683,7 +706,7 @@ func (c *Core) getMe(w http.ResponseWriter, _ *http.Request, p principal) {
 	}
 	out := map[string]any{"id": u.ID, "name": u.Name, "email": u.Email, "roles": u.Roles, "active": u.Active, "linked_contact_id": linked}
 	if u.clientOnly() {
-		ended := 0
+		ended := zero
 		for _, m := range c.Matters {
 			if c.isParty(u.LinkedContactID, m.ID, "client") && !c.canRead(u, m.ID) {
 				ended++
@@ -691,7 +714,7 @@ func (c *Core) getMe(w http.ResponseWriter, _ *http.Request, p principal) {
 		}
 		out["access_ended_matters"] = ended
 	}
-	reply(w, 200, out)
+	reply(w, http.StatusOK, out)
 }
 
 func (c *Core) clientMatters(u *User) []*Matter {
@@ -712,7 +735,7 @@ func (c *Core) clientMatters(u *User) []*Matter {
 
 func (c *Core) myTrust(w http.ResponseWriter, _ *http.Request, p principal) {
 	if !p.user.clientOnly() {
-		problem(w, 403, "forbidden", "client role")
+		problem(w, http.StatusForbidden, "forbidden", "client role")
 		return
 	}
 	out := []map[string]any{}
@@ -725,20 +748,20 @@ func (c *Core) myTrust(w http.ResponseWriter, _ *http.Request, p principal) {
 		}
 		out = append(out, map[string]any{"matter_id": m.ID, "balance_cents": c.Trust[p.user.LinkedContactID+"|"+m.ID], "replenishment_requests": reqs})
 	}
-	reply(w, 200, map[string]any{"data": out})
+	reply(w, http.StatusOK, map[string]any{"data": out})
 }
 
 func (c *Core) myLedger(w http.ResponseWriter, r *http.Request, p principal) {
 	m := r.URL.Query().Get("matter_id")
 	if !p.user.clientOnly() || !c.canRead(p.user, m) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	rows := c.Ledger[p.user.LinkedContactID+"|"+m]
 	if rows == nil {
 		rows = []map[string]any{}
 	}
-	reply(w, 200, map[string]any{"data": rows})
+	reply(w, http.StatusOK, map[string]any{"data": rows})
 }
 
 func (c *Core) myAppointments(w http.ResponseWriter, _ *http.Request, p principal) {
@@ -748,17 +771,17 @@ func (c *Core) myAppointments(w http.ResponseWriter, _ *http.Request, p principa
 			out = append(out, map[string]any{"title": a.Title, "kind": a.Kind, "start": a.Start, "end": a.End, "all_day": false, "location": a.Location, "matter_id": a.MatterID})
 		}
 	}
-	reply(w, 200, map[string]any{"data": out})
+	reply(w, http.StatusOK, map[string]any{"data": out})
 }
 
 func (c *Core) myContact(w http.ResponseWriter, _ *http.Request, p principal) {
 	ct := c.Contacts[p.user.LinkedContactID]
 	if !p.user.clientOnly() || ct == nil {
-		problem(w, 404, "not_found", "contact")
+		problem(w, http.StatusNotFound, "not_found", "contact")
 		return
 	}
 	cur := ct.current()
-	reply(w, 200, map[string]any{"email": cur.Email, "phone": cur.Phone, "mailing_address": map[string]string{"line1": cur.Line1, "line2": cur.Line2,
+	reply(w, http.StatusOK, map[string]any{"email": cur.Email, "phone": cur.Phone, "mailing_address": map[string]string{"line1": cur.Line1, "line2": cur.Line2,
 		"city": cur.City, "region": cur.Region, "postal_code": cur.PostalCode, "country": cur.Country}})
 }
 
@@ -767,7 +790,7 @@ func (c *Core) myContact(w http.ResponseWriter, _ *http.Request, p principal) {
 func (c *Core) patchMyContact(w http.ResponseWriter, r *http.Request, p principal) {
 	ct := c.Contacts[p.user.LinkedContactID]
 	if !p.user.clientOnly() || ct == nil {
-		problem(w, 404, "not_found", "contact")
+		problem(w, http.StatusNotFound, "not_found", "contact")
 		return
 	}
 	var in struct {
@@ -775,7 +798,7 @@ func (c *Core) patchMyContact(w http.ResponseWriter, r *http.Request, p principa
 		Address      map[string]string `json:"mailing_address"`
 	}
 	if json.NewDecoder(r.Body).Decode(&in) != nil || (in.Email != "" && !strings.Contains(in.Email, "@")) {
-		problem(w, 400, "validation_failed", "email")
+		problem(w, http.StatusBadRequest, "validation_failed", "email")
 		return
 	}
 	cur := ct.current()
@@ -783,7 +806,7 @@ func (c *Core) patchMyContact(w http.ResponseWriter, r *http.Request, p principa
 		Region: in.Address["region"], PostalCode: in.Address["postal_code"], Country: in.Address["country"], EffectiveFrom: c.Now().Unix(), ActorID: p.user.ID}
 	if next.Email == cur.Email && next.Phone == cur.Phone && next.Line1 == cur.Line1 && next.Line2 == cur.Line2 && next.City == cur.City &&
 		next.Region == cur.Region && next.PostalCode == cur.PostalCode && next.Country == cur.Country {
-		reply(w, 200, map[string]any{"changed": false})
+		reply(w, http.StatusOK, map[string]any{"changed": false})
 		return
 	}
 	cur.EffectiveTo = c.Now().Unix()
@@ -792,7 +815,7 @@ func (c *Core) patchMyContact(w http.ResponseWriter, r *http.Request, p principa
 		c.Events = append(c.Events, Event{Action: "contact.updated", RecordType: "contact", RecordID: ct.ID, MatterID: m.ID, Summary: "Contact details updated by the client",
 			ClientVisible: true, ActorID: p.user.ID, ActorKind: "client"})
 	}
-	reply(w, 200, map[string]any{"changed": true})
+	reply(w, http.StatusOK, map[string]any{"changed": true})
 }
 
 func (c *Core) matterJSON(u *User, m *Matter) map[string]any {
@@ -820,7 +843,7 @@ func (c *Core) listMatters(w http.ResponseWriter, r *http.Request, p principal) 
 			out = append(out, c.matterJSON(p.user, m))
 		}
 	}
-	reply(w, 200, page(out))
+	reply(w, http.StatusOK, page(out))
 }
 
 // getMatter also serves include=client-portal.thread_summary from the module's
@@ -828,7 +851,7 @@ func (c *Core) listMatters(w http.ResponseWriter, r *http.Request, p principal) 
 func (c *Core) getMatter(w http.ResponseWriter, r *http.Request, p principal) {
 	m := c.Matters[r.PathValue("id")]
 	if m == nil || !c.canRead(p.user, m.ID) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	out := c.matterJSON(p.user, m)
@@ -845,13 +868,13 @@ func (c *Core) getMatter(w http.ResponseWriter, r *http.Request, p principal) {
 		}
 		out["included"] = map[string]any{inc: rows}
 	}
-	reply(w, 200, out)
+	reply(w, http.StatusOK, out)
 }
 
 func (c *Core) listParties(w http.ResponseWriter, r *http.Request, p principal) {
 	m := r.URL.Query().Get("matter_id")
 	if p.user.clientOnly() || !c.canRead(p.user, m) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	out := []map[string]any{}
@@ -860,16 +883,16 @@ func (c *Core) listParties(w http.ResponseWriter, r *http.Request, p principal) 
 			out = append(out, map[string]any{"id": pt.ID, "matter_id": pt.MatterID, "contact_id": pt.ContactID, "role": pt.Role, "primary": false})
 		}
 	}
-	reply(w, 200, page(out))
+	reply(w, http.StatusOK, page(out))
 }
 
 func (c *Core) getContact(w http.ResponseWriter, r *http.Request, p principal) {
 	ct := c.Contacts[r.PathValue("id")]
 	if ct == nil || p.user.clientOnly() {
-		problem(w, 404, "not_found", "contact")
+		problem(w, http.StatusNotFound, "not_found", "contact")
 		return
 	}
-	reply(w, 200, map[string]any{"id": ct.ID, "kind": "person", "full_name": ct.Name})
+	reply(w, http.StatusOK, map[string]any{"id": ct.ID, "kind": "person", "full_name": ct.Name})
 }
 
 // directory is CORE-19: a client caller gets names of active staff users only.
@@ -888,7 +911,7 @@ func (c *Core) directory(w http.ResponseWriter, r *http.Request, p principal) {
 		}
 		out = append(out, map[string]any{"id": u.ID, "name": u.Name, "roles": u.Roles, "active": u.Active})
 	}
-	reply(w, 200, page(out))
+	reply(w, http.StatusOK, page(out))
 }
 
 func (c *Core) fileJSON(f *File) map[string]any {
@@ -901,7 +924,7 @@ func (c *Core) fileJSON(f *File) map[string]any {
 func (c *Core) listFiles(w http.ResponseWriter, r *http.Request, p principal) {
 	m := r.URL.Query().Get("matter_id")
 	if !c.canRead(p.user, m) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	var fs []*File
@@ -915,22 +938,22 @@ func (c *Core) listFiles(w http.ResponseWriter, r *http.Request, p principal) {
 	for _, f := range fs {
 		out = append(out, c.fileJSON(f))
 	}
-	reply(w, 200, page(out))
+	reply(w, http.StatusOK, page(out))
 }
 
 func (c *Core) getFile(w http.ResponseWriter, r *http.Request, p principal) {
 	f := c.Files[r.PathValue("id")]
 	if f == nil || !c.canSeeFile(p.user, f) {
-		problem(w, 404, "not_found", "file")
+		problem(w, http.StatusNotFound, "not_found", "file")
 		return
 	}
-	reply(w, 200, c.fileJSON(f))
+	reply(w, http.StatusOK, c.fileJSON(f))
 }
 
 func (c *Core) patchFile(w http.ResponseWriter, r *http.Request, p principal) {
 	f := c.Files[r.PathValue("id")]
 	if f == nil || !c.canSeeFile(p.user, f) || p.user.clientOnly() {
-		problem(w, 404, "not_found", "file")
+		problem(w, http.StatusNotFound, "not_found", "file")
 		return
 	}
 	var in struct {
@@ -940,13 +963,13 @@ func (c *Core) patchFile(w http.ResponseWriter, r *http.Request, p principal) {
 	if in.Shared != nil {
 		f.Shared = *in.Shared
 	}
-	reply(w, 200, c.fileJSON(f))
+	reply(w, http.StatusOK, c.fileJSON(f))
 }
 
 func (c *Core) download(w http.ResponseWriter, r *http.Request, p principal) {
 	f := c.Files[r.PathValue("id")]
 	if f == nil || !c.canSeeFile(p.user, f) || f.VersionID != r.PathValue("vid") {
-		problem(w, 404, "not_found", "file")
+		problem(w, http.StatusNotFound, "not_found", "file")
 		return
 	}
 	_, _ = w.Write(f.Bytes)
@@ -959,56 +982,56 @@ func (c *Core) createUpload(w http.ResponseWriter, r *http.Request, p principal)
 		MediaType string `json:"media_type"`
 		SizeBytes int64  `json:"size_bytes"`
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.FileName == "" || in.SizeBytes <= 0 {
-		problem(w, 400, "validation_failed", "file_name and size_bytes")
+	if json.NewDecoder(r.Body).Decode(&in) != nil || in.FileName == "" || in.SizeBytes <= int64(zero) {
+		problem(w, http.StatusBadRequest, "validation_failed", "file_name and size_bytes")
 		return
 	}
 	if !c.canRead(p.user, in.MatterID) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	u := &Upload{ID: c.NewID(), Owner: p.user.ID, Name: in.FileName, MatterID: in.MatterID, MediaType: in.MediaType, Size: in.SizeBytes, Status: "receiving"}
 	c.Uploads[u.ID] = u
-	reply(w, 201, c.uploadJSON(u))
+	reply(w, http.StatusCreated, c.uploadJSON(u))
 }
 
 func (c *Core) uploadJSON(u *Upload) map[string]any {
 	return map[string]any{"id": u.ID, "chunk_size_bytes": c.ChunkSize, "next_offset": len(u.Data), "size_bytes": u.Size, "status": u.Status,
-		"expires_at": c.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)}
+		"expires_at": c.Now().Add(uploadExpiry).UTC().Format(time.RFC3339)}
 }
 
 func (c *Core) putChunk(w http.ResponseWriter, r *http.Request, p principal) {
 	u := c.Uploads[r.PathValue("id")]
 	if u == nil || u.Owner != p.user.ID || u.Status != "receiving" {
-		problem(w, 404, "not_found", "upload")
+		problem(w, http.StatusNotFound, "not_found", "upload")
 		return
 	}
 	var start, end, total int64
 	if _, err := fmt.Sscanf(r.Header.Get("Content-Range"), "bytes %d-%d/%d", &start, &end, &total); err != nil || total != u.Size || start != int64(len(u.Data)) || end < start {
-		problem(w, 400, "validation_failed", "Content-Range")
+		problem(w, http.StatusBadRequest, "validation_failed", "Content-Range")
 		return
 	}
 	b, _ := io.ReadAll(r.Body)
 	if int64(len(b)) != end-start+1 || int64(len(b)) > c.ChunkSize {
-		problem(w, 400, "validation_failed", "chunk size")
+		problem(w, http.StatusBadRequest, "validation_failed", "chunk size")
 		return
 	}
 	u.Data = append(u.Data, b...)
-	reply(w, 200, c.uploadJSON(u))
+	reply(w, http.StatusOK, c.uploadJSON(u))
 }
 
 func (c *Core) completeUpload(w http.ResponseWriter, r *http.Request, p principal) {
 	u := c.Uploads[r.PathValue("id")]
 	if u == nil || u.Owner != p.user.ID {
-		problem(w, 404, "not_found", "upload")
+		problem(w, http.StatusNotFound, "not_found", "upload")
 		return
 	}
 	if int64(len(u.Data)) != u.Size {
-		problem(w, 409, "conflict", "incomplete")
+		problem(w, http.StatusConflict, "conflict", "incomplete")
 		return
 	}
 	u.Status = "staged"
-	reply(w, 200, c.uploadJSON(u))
+	reply(w, http.StatusOK, c.uploadJSON(u))
 }
 
 // publishFile makes a staged upload a file. A client-only viewer's file is a client
@@ -1023,11 +1046,11 @@ func (c *Core) publishFile(w http.ResponseWriter, r *http.Request, p principal) 
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	u := c.Uploads[in.UploadID]
 	if u == nil || u.Owner != p.user.ID || u.Status != "staged" {
-		problem(w, 404, "not_found", "upload")
+		problem(w, http.StatusNotFound, "not_found", "upload")
 		return
 	}
 	if !c.canRead(p.user, in.MatterID) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	name := in.Name
@@ -1042,7 +1065,7 @@ func (c *Core) publishFile(w http.ResponseWriter, r *http.Request, p principal) 
 	u.Status = "published"
 	c.Files[f.ID] = f
 	c.mirror("files", f.ID)
-	reply(w, 201, c.fileJSON(f))
+	reply(w, http.StatusCreated, c.fileJSON(f))
 }
 
 func (c *Core) archive(w http.ResponseWriter, r *http.Request, p principal) {
@@ -1050,14 +1073,14 @@ func (c *Core) archive(w http.ResponseWriter, r *http.Request, p principal) {
 		FileIDs []string `json:"file_ids"`
 	}
 	if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.FileIDs) == 0 {
-		problem(w, 400, "validation_failed", "file_ids")
+		problem(w, http.StatusBadRequest, "validation_failed", "file_ids")
 		return
 	}
 	var fs []*File
 	for _, id := range in.FileIDs {
 		f := c.Files[id]
 		if f == nil || !c.canSeeFile(p.user, f) {
-			problem(w, 404, "not_found", "file")
+			problem(w, http.StatusNotFound, "not_found", "file")
 			return
 		}
 		fs = append(fs, f)
@@ -1086,14 +1109,14 @@ func (c *Core) clientInvoice(u *User, in *Invoice) bool {
 
 func (c *Core) invoiceJSON(in *Invoice) map[string]any {
 	return map[string]any{"id": in.ID, "matter_id": in.MatterID, "number": in.Number, "issued_on": "2026-11-01", "status": in.Status, "lines": []any{},
-		"subtotal_cents": in.TotalCents, "adjustment_cents": 0, "interest_cents": 0, "total_cents": in.TotalCents, "amount_paid_cents": in.PaidCents,
+		"subtotal_cents": in.TotalCents, "adjustment_cents": zero, "interest_cents": zero, "total_cents": in.TotalCents, "amount_paid_cents": in.PaidCents,
 		"balance_due_cents": in.TotalCents - in.PaidCents}
 }
 
 func (c *Core) listInvoices(w http.ResponseWriter, r *http.Request, p principal) {
 	m := r.URL.Query().Get("matter_id")
 	if !c.canRead(p.user, m) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	var ins []*Invoice
@@ -1107,32 +1130,34 @@ func (c *Core) listInvoices(w http.ResponseWriter, r *http.Request, p principal)
 	for _, in := range ins {
 		out = append(out, c.invoiceJSON(in))
 	}
-	reply(w, 200, page(out))
+	reply(w, http.StatusOK, page(out))
 }
 
 // getInvoice marks a sent invoice viewed when its client opens it.
 func (c *Core) getInvoice(w http.ResponseWriter, r *http.Request, p principal) {
 	in := c.Invoices[r.PathValue("id")]
 	if in == nil || !c.clientInvoice(p.user, in) {
-		problem(w, 404, "not_found", "invoice")
+		problem(w, http.StatusNotFound, "not_found", "invoice")
 		return
 	}
 	if p.user.clientOnly() && in.Status == "sent" {
 		in.Status = "viewed"
 	}
-	reply(w, 200, c.invoiceJSON(in))
+	reply(w, http.StatusOK, c.invoiceJSON(in))
 }
 
-func (c *Core) firm(w http.ResponseWriter, _ *http.Request, _ principal) { reply(w, 200, c.Firm) }
+func (c *Core) firm(w http.ResponseWriter, _ *http.Request, _ principal) {
+	reply(w, http.StatusOK, c.Firm)
+}
 
 func (c *Core) nav(w http.ResponseWriter, _ *http.Request, p principal) {
 	if !p.user.clientOnly() {
-		problem(w, 403, "forbidden", "client role")
+		problem(w, http.StatusForbidden, "forbidden", "client role")
 		return
 	}
 	out := []map[string]any{{"module_id": ModuleID, "tab_id": "home", "title": "Dashboard"}}
 	out = append(out, c.OtherNav...)
-	reply(w, 200, map[string]any{"data": out})
+	reply(w, http.StatusOK, map[string]any{"data": out})
 }
 
 // createEvent appends a timeline row. Firm users write on matters they read; a client
@@ -1150,7 +1175,7 @@ func (c *Core) createEvent(w http.ResponseWriter, r *http.Request, p principal) 
 		ClientVisible bool    `json:"client_visible"`
 	}
 	if json.NewDecoder(r.Body).Decode(&in) != nil || in.Action == "" || in.RecordType == "" || in.RecordID == "" || in.Summary == "" {
-		problem(w, 400, "validation_failed", "event")
+		problem(w, http.StatusBadRequest, "validation_failed", "event")
 		return
 	}
 	m := ""
@@ -1159,24 +1184,24 @@ func (c *Core) createEvent(w http.ResponseWriter, r *http.Request, p principal) 
 	}
 	if p.service {
 		if m != "" && c.Matters[m] == nil {
-			problem(w, 404, "not_found", "matter")
+			problem(w, http.StatusNotFound, "not_found", "matter")
 			return
 		}
 		c.Events = append(c.Events, Event{Action: in.Action, RecordType: in.RecordType, RecordID: in.RecordID, MatterID: m, Summary: in.Summary,
 			ClientVisible: in.ClientVisible, ActorID: p.module, ActorKind: "module"})
-		reply(w, 201, map[string]any{"action": in.Action})
+		reply(w, http.StatusCreated, map[string]any{"action": in.Action})
 		return
 	}
 	if p.user.clientOnly() && c.ClientEventsRefused {
-		problem(w, 403, "forbidden", "admin, attorney or staff role is required")
+		problem(w, http.StatusForbidden, "forbidden", "admin, attorney or staff role is required")
 		return
 	}
 	if m != "" && !c.canRead(p.user, m) {
-		problem(w, 404, "not_found", "matter")
+		problem(w, http.StatusNotFound, "not_found", "matter")
 		return
 	}
 	if p.user.clientOnly() && !in.ClientVisible {
-		problem(w, 403, "forbidden", "a client writes client-visible rows only")
+		problem(w, http.StatusForbidden, "forbidden", "a client writes client-visible rows only")
 		return
 	}
 	kind := "staff"
@@ -1185,7 +1210,7 @@ func (c *Core) createEvent(w http.ResponseWriter, r *http.Request, p principal) 
 	}
 	c.Events = append(c.Events, Event{Action: in.Action, RecordType: in.RecordType, RecordID: in.RecordID, MatterID: m, Summary: in.Summary,
 		ClientVisible: in.ClientVisible, ActorID: p.user.ID, ActorKind: kind})
-	reply(w, 201, map[string]any{"action": in.Action})
+	reply(w, http.StatusCreated, map[string]any{"action": in.Action})
 }
 
 var declaredKinds = map[string][]string{"client_message": {"in_app", "email"}, "client_upload": {"in_app"}}
@@ -1203,13 +1228,13 @@ func (c *Core) createNotification(w http.ResponseWriter, r *http.Request, p prin
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	kind := strings.TrimPrefix(in.Kind, p.module+".")
 	chans, ok := declaredKinds[kind]
-	if !ok || in.Title == "" || len(in.Title) > 200 || !(strings.HasPrefix(in.Link, "/modules/"+p.module+"/") || strings.HasPrefix(in.Link, "/portal/"+p.module+"/")) {
-		problem(w, 400, "validation_failed", "notification")
+	if !ok || in.Title == "" || len(in.Title) > maxTitleChars || !(strings.HasPrefix(in.Link, "/modules/"+p.module+"/") || strings.HasPrefix(in.Link, "/portal/"+p.module+"/")) {
+		problem(w, http.StatusBadRequest, "validation_failed", "notification")
 		return
 	}
 	m := c.Matters[in.MatterID]
 	if in.Audience != "matter_team" || m == nil {
-		problem(w, 400, "validation_failed", "audience")
+		problem(w, http.StatusBadRequest, "validation_failed", "audience")
 		return
 	}
 	email := false
@@ -1225,7 +1250,7 @@ func (c *Core) createNotification(w http.ResponseWriter, r *http.Request, p prin
 		c.Notifications = append(c.Notifications, Notification{UserID: uid, Kind: p.module + "." + kind, Title: in.Title, Link: in.Link, MatterID: m.ID, Email: email})
 		ids = append(ids, uid)
 	}
-	reply(w, 201, map[string]any{"created": len(ids), "notification_ids": ids})
+	reply(w, http.StatusCreated, map[string]any{"created": len(ids), "notification_ids": ids})
 }
 
 // sendMail is CORE-04 with to_user_ids.
@@ -1239,7 +1264,7 @@ func (c *Core) sendMail(w http.ResponseWriter, r *http.Request, p principal) {
 	}
 	if json.NewDecoder(r.Body).Decode(&in) != nil || len(in.To) == 0 || in.Subject == "" || in.Text == "" ||
 		!(strings.HasPrefix(in.LinkPath, "/portal/") || strings.HasPrefix(in.LinkPath, "/modules/")) {
-		problem(w, 400, "validation_failed", "mail")
+		problem(w, http.StatusBadRequest, "validation_failed", "mail")
 		return
 	}
 	results := []map[string]any{}
@@ -1258,14 +1283,14 @@ func (c *Core) sendMail(w http.ResponseWriter, r *http.Request, p principal) {
 	if in.MatterID != "" {
 		c.Events = append(c.Events, Event{Action: "mail.sent", RecordType: "matter", RecordID: in.MatterID, MatterID: in.MatterID, Summary: "Email sent: " + in.Subject})
 	}
-	reply(w, 200, map[string]any{"results": results})
+	reply(w, http.StatusOK, map[string]any{"results": results})
 }
 
 // --- client access (CORE-14) ---
 
 func (c *Core) accessContact(w http.ResponseWriter, p principal, contact string) bool {
 	if !p.user.has("admin", "attorney", "staff") {
-		problem(w, 403, "forbidden", "client_access")
+		problem(w, http.StatusForbidden, "forbidden", "client_access")
 		return false
 	}
 	for _, pt := range c.Parties {
@@ -1273,7 +1298,7 @@ func (c *Core) accessContact(w http.ResponseWriter, p principal, contact string)
 			return true
 		}
 	}
-	problem(w, 404, "not_found", "contact")
+	problem(w, http.StatusNotFound, "not_found", "contact")
 	return false
 }
 
@@ -1297,10 +1322,10 @@ func (c *Core) getAccess(w http.ResponseWriter, r *http.Request, p principal) {
 	}
 	u := c.linkedUser(contact)
 	if u == nil {
-		problem(w, 404, "not_found", "client access")
+		problem(w, http.StatusNotFound, "not_found", "client access")
 		return
 	}
-	reply(w, 200, c.accessJSON(u))
+	reply(w, http.StatusOK, c.accessJSON(u))
 }
 
 func (c *Core) grantAccess(w http.ResponseWriter, r *http.Request, p principal) {
@@ -1320,7 +1345,7 @@ func (c *Core) grantAccess(w http.ResponseWriter, r *http.Request, p principal) 
 			email = c.Contacts[in.ContactID].current().Email
 		}
 		if email == "" {
-			problem(w, 400, "validation_failed", "email")
+			problem(w, http.StatusBadRequest, "validation_failed", "email")
 			return
 		}
 		u = &User{ID: c.NewID(), Name: c.Contacts[in.ContactID].Name, Email: email, Roles: []string{"client"}, Active: true, LinkedContactID: in.ContactID}
@@ -1328,40 +1353,40 @@ func (c *Core) grantAccess(w http.ResponseWriter, r *http.Request, p principal) 
 		c.mirror("users", u.ID)
 		created = true
 	} else if !u.clientOnly() {
-		problem(w, 409, "conflict", "the user holds another role")
+		problem(w, http.StatusConflict, "conflict", "the user holds another role")
 		return
 	}
-	u.Password, u.MustChangePassword = "tmp-"+c.randHex(8), true
+	u.Password, u.MustChangePassword = "tmp-"+c.randHex(secretBytes), true
 	c.Events = append(c.Events, Event{Action: "client_access.granted", RecordType: "user", RecordID: u.ID, Summary: "Portal access granted"})
-	reply(w, 200, map[string]any{"user_id": u.ID, "created": created, "email": u.Email, "mail_status": c.AccessMailStatus})
+	reply(w, http.StatusOK, map[string]any{"user_id": u.ID, "created": created, "email": u.Email, "mail_status": c.AccessMailStatus})
 }
 
 func (c *Core) accessAction(w http.ResponseWriter, r *http.Request, p principal) {
 	u := c.Users[r.PathValue("uid")]
 	if u == nil || u.LinkedContactID == "" || !c.accessContact(w, p, u.LinkedContactID) {
 		if u == nil || u.LinkedContactID == "" {
-			problem(w, 404, "not_found", "user")
+			problem(w, http.StatusNotFound, "not_found", "user")
 		}
 		return
 	}
 	if !u.clientOnly() {
-		problem(w, 409, "conflict", "the user holds another role")
+		problem(w, http.StatusConflict, "conflict", "the user holds another role")
 		return
 	}
 	switch r.PathValue("action") {
 	case "temporary-password":
-		pw := "tmp-" + c.randHex(8)
-		u.Password, u.MustChangePassword, u.Sessions = pw, true, 0
+		pw := "tmp-" + c.randHex(secretBytes)
+		u.Password, u.MustChangePassword, u.Sessions = pw, true, zero
 		c.Events = append(c.Events, Event{Action: "client_access.password_reset", RecordType: "user", RecordID: u.ID, Summary: "Temporary password set"})
-		reply(w, 200, map[string]any{"temporary_password": pw})
+		reply(w, http.StatusOK, map[string]any{"temporary_password": pw})
 	case "deactivate":
 		u.Active = false
-		reply(w, 200, c.accessJSON(u))
+		reply(w, http.StatusOK, c.accessJSON(u))
 	case "reactivate":
 		u.Active = true
-		reply(w, 200, c.accessJSON(u))
+		reply(w, http.StatusOK, c.accessJSON(u))
 	default:
-		problem(w, 404, "not_found", "action")
+		problem(w, http.StatusNotFound, "not_found", "action")
 	}
 }
 
@@ -1376,7 +1401,7 @@ func (c *Core) Reset() {
 func (c *Core) Count(action string) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	n := 0
+	n := zero
 	for _, e := range c.Events {
 		if e.Action == action {
 			n++

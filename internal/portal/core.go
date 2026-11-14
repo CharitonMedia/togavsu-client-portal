@@ -4,10 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/CharitonMedia/togavsu-client-portal/internal/coreapi"
 )
+
+var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // Core records as the core API returns them. Only the fields the module reads are
 // declared; the core's access rules decide which records and fields reach a viewer.
@@ -177,7 +180,7 @@ func (f FirmProfile) PortalLabel() string {
 // plain #rrggbb color.
 func (f FirmProfile) HeaderColor() string {
 	v, _ := f.ClientPortal["client_header"].(string)
-	if len(v) == 7 && v[0] == '#' && strings.Trim(v[1:], "0123456789abcdefABCDEF") == "" {
+	if hexColor.MatchString(v) {
 		return v
 	}
 	return "#1f2a44"
