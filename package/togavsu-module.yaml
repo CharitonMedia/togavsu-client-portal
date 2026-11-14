@@ -1,0 +1,274 @@
+# Client Portal: the client's own screens, the staff Messages inbox and the Portal
+# access panel. Fields marked with a CORE comment need that item of the module API
+# update (docs/modules/CORE-CHANGES.md in the core repository).
+id: client-portal
+name: Client Portal
+version: "1.0.0"
+author: Chariton Media
+homepage: https://github.com/CharitonMedia/togavsu-client-portal
+license: Same as Togavsu
+price: Free
+container:
+  image: ghcr.io/charitonmedia/togavsu-client-portal
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  port: 8080
+# CORE-10
+client_home: home
+permissions:
+  - scope: matters:read
+    reason: List the client's matters and the matter behind each thread.
+  - scope: contacts:read
+    reason: Show staff the client parties on a matter and each client's name.
+  # CORE-19
+  - scope: users:directory
+    reason: Label each message with the staff member who wrote it.
+  - scope: files:read
+    reason: List shared documents and check attachments.
+  - scope: files:write
+    reason: Save client uploads and share attached documents with the client.
+  - scope: invoices:read
+    reason: Show the client's sent invoices.
+  - scope: trust:read
+    reason: Show the client their own trust balance and replenishment requests.
+  - scope: calendar:read
+    reason: Show the client their next appointment.
+  - scope: profile:read
+    reason: Read the signed-in client's account and contact details.
+  - scope: profile:write
+    reason: Save the client's own contact detail changes.
+  # CORE-18
+  - scope: firm:read
+    reason: Firm name, phone, email and client portal colors.
+  - scope: events:write
+    reason: Put message and document activity on the case timeline.
+  - scope: notifications:write
+    reason: Tell staff when a client writes or uploads.
+  # CORE-04
+  - scope: mail:send
+    reason: Email a client that the firm sent a message.
+  # CORE-14
+  - scope: client_access:read
+    reason: Show each client's portal status on the matter.
+  # CORE-14
+  - scope: client_access:write
+    reason: Grant, resend, reset and turn off portal access.
+  - scope: views:lawpay-docuseal.invoice_payability:read
+    required: false
+    reason: Show Pay on payable invoices.
+  - scope: views:lawpay-docuseal.matter_payability:read
+    required: false
+    reason: Show Make a deposit.
+  - scope: views:lawpay-docuseal.signature_requests:read
+    required: false
+    reason: List documents waiting for the client's signature.
+widgets:
+  - id: client-messages
+    title: Client messages
+    path: /staff/widget
+    roles: [admin, attorney, staff]
+    size:
+      w: 4
+      h: 2
+    sizes:
+      - w: 4
+        h: 2
+      - w: 6
+        h: 3
+    target:
+      tab: inbox
+      params: [matter_id]
+tabs:
+  - id: inbox
+    title: Messages
+    placement: home
+    path: /staff/inbox
+    # CORE-10: tab params
+    params: [matter_id, contact_id, status, thread_id]
+  - id: messages
+    title: Messages
+    placement: matter
+    path: /staff/matter-messages
+    # CORE-10: tab params
+    params: [thread_id]
+  # CORE-10: client placement and params
+  - id: home
+    title: Dashboard
+    placement: client
+    path: /client/home
+  - id: documents
+    title: Documents
+    placement: client
+    path: /client/documents
+    params: [matter_id]
+  - id: invoices
+    title: Invoices
+    placement: client
+    path: /client/invoices
+    params: [matter_id, invoice_id]
+  - id: client-messages
+    title: Messages
+    placement: client
+    path: /client/messages
+    params: [matter_id, thread_id]
+  - id: account
+    title: Account
+    placement: client
+    path: /client/account
+matter_items:
+  - id: access
+    kind: panel
+    title: Portal access
+    path: /staff/access
+sidebar:
+  - id: messages
+    title: Messages
+    path: /staff/inbox
+    # CORE-08
+    section: communications
+    icon: message
+    order: 10
+    badge:
+      path: /staff/badge
+      tone: normal
+quick_create:
+  - id: new-message
+    title: New message
+    path: /staff/new
+search_scopes:
+  - id: messages
+    title: Messages
+    path: /staff/search
+# CORE-03
+notifications:
+  - kind: client_message
+    label: A client sent a portal message
+    default_channels: [in_app, email]
+  - kind: client_upload
+    label: A client uploaded a document
+    default_channels: [in_app]
+data:
+  extends:
+    - name: preferences
+      record: user
+      table: portal_preferences
+      key: user_id
+      columns:
+        - name: active_matter_id
+    - name: client_upload
+      record: file
+      table: client_uploads
+      key: file_id
+      columns:
+        - name: uploaded_at
+  views:
+    - name: thread_summary
+      record: matter
+      key: matter_id
+      columns:
+        - name: active_threads
+        - name: unread_from_client
+        - name: last_message_at
+settings:
+  - key: upload_max_file_mb
+    label: Largest client upload in MB
+    type: int
+    default: "250"
+  - key: upload_daily_mb
+    label: Client upload MB per matter per 24 hours
+    type: int
+    default: "2048"
+  - key: upload_daily_files
+    label: Client uploads per matter per 24 hours
+    type: int
+    default: "100"
+  - key: upload_rate_per_5min
+    label: Client uploads per client per 5 minutes
+    type: int
+    default: "90"
+  - key: message_max_chars
+    label: Longest message in characters
+    type: int
+    default: "10000"
+  - key: email_client_on_staff_message
+    label: Email the client when staff send a message
+    type: bool
+    default: "true"
+  - key: welcome_text
+    label: Dashboard welcome text for clients
+    type: string
+    default: ""
+help:
+  heading: Client Portal
+  pages:
+    - id: overview
+      title: Client portal overview
+      keywords: [portal, client, sign in]
+      covers: [/modules/client-portal/tabs/inbox]
+      body: |
+        The client portal is the only part of Togavsu a client ever sees. A client signs
+        in at the normal sign-in page and lands on their portal Dashboard.
+
+        **What clients see.** Only matters where they are a client party, newest first:
+
+        - **Dashboard**: new documents, unread messages, the balance due on sent
+          invoices, their own trust balance and any replenishment request, and their
+          next appointment.
+        - **Documents**: files staff shared with the client. Clients can upload files
+          to a matter and download everything as one zip.
+        - **Invoices**: sent, viewed and paid invoices. Opening one marks it viewed.
+        - **Messages**: conversations with the firm about one matter.
+        - **Account**: their contact details and a link to change their password.
+
+        A closed matter stays in the portal for the number of days set in
+        **Settings > Security > Client access after close**, then the client sees
+        "access ended" with the firm's phone and email.
+
+        **Where staff find it.** **Communications > Messages** in the sidebar is the
+        firm-wide inbox. Each matter has a **Messages** tab and a **Portal access**
+        panel. Upload limits, the longest message and client email notices are set in
+        **Admin > Modules and marketplace > Client Portal > Settings**.
+    - id: messages
+      title: Client messages
+      keywords: [message, inbox, unread, thread, attach]
+      covers: [client-portal.client-messages, /modules/client-portal/tabs/messages]
+      body: |
+        **Inbox.** Open **Communications > Messages**. The number beside it counts
+        unread client messages on matters you can see. Filter by matter or by contact.
+        Archived conversations leave the inbox; pick **Archived** in the status filter
+        to find them.
+
+        **Matter tab.** On a matter, open the **Messages** tab to see that matter's
+        conversations and start a new one with a client party. Conversations start only
+        on open matters.
+
+        **Writing.** Each conversation is with one client contact. Use **Attach** to
+        link documents already on the matter; attaching a document shares it with the
+        client and adds a "sent to client" row to the timeline every time. The client
+        gets an email that a message is waiting, with a portal link and never the
+        message itself.
+
+        **Read receipts.** "Read" shows under your message once the client opens the
+        conversation. Opening a conversation marks the client's messages read.
+
+        **Closing.** **Archive** hides a conversation from the inbox; it stays
+        readable. **Close** stops new messages from either side. **Retract** removes
+        your own message; the client then sees "Message removed".
+    - id: access
+      title: Giving a client portal access
+      keywords: [portal access, temporary password, resend, reset]
+      covers: [/modules/client-portal/matter-items/access]
+      body: |
+        Open the matter and its **Portal access** panel. Every client party on the
+        matter is listed with their portal status.
+
+        - **Send portal access** creates the client's sign-in if they have none and
+          emails them a one-time temporary password and the sign-in address. The panel
+          shows "Sent to" and the address, or "Not sent" when the email failed, so you
+          can try again.
+        - **Temporary password** sets a new temporary password and shows it to you
+          once, to read to the client by phone. Their old sessions end.
+        - **Turn off** stops the client signing in. **Turn on** lets them back in.
+          Neither changes the contact or the matters.
+
+        A client always sets a new password at their next sign-in. A person who also
+        has a staff sign-in can't be given portal access here.
