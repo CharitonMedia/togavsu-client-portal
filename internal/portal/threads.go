@@ -139,8 +139,12 @@ func (s *Server) listThreads(ctx context.Context, v *viewer, f ThreadFilter) ([]
 		where = append(where, strings.ReplaceAll(cond, "?", "$"+itoa(len(args))))
 	}
 	if f.MatterID != "" {
-		if !validID(f.MatterID) {
-			return nil, errNotFound
+		// A named matter the viewer can't read is 404, the same as one that doesn't exist.
+		if ok, err := s.canRead(ctx, v, f.MatterID); err != nil || !ok {
+			if err == nil {
+				err = errNotFound
+			}
+			return nil, err
 		}
 		add("t.matter_id = ?", f.MatterID)
 	}

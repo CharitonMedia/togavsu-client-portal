@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+
+	"github.com/CharitonMedia/togavsu-client-portal/internal/coreapi"
 )
 
 const clientTemplates = `
@@ -576,8 +578,7 @@ func (s *Server) accountPost(w http.ResponseWriter, r *http.Request, v *viewer) 
 			Region: r.PostFormValue("region"), PostalCode: r.PostFormValue("postal_code"), Country: r.PostFormValue("country")}}
 	status, note, errText := http.StatusOK, "Saved.", ""
 	if err := s.api.Patch(r.Context(), v.Token, "/api/v1/me/contact", c, nil); err != nil {
-		e := asAPIError(err)
-		if e.Status >= http.StatusInternalServerError {
+		if st := coreapi.StatusOf(err); st != http.StatusBadRequest && st != http.StatusUnprocessableEntity {
 			s.fail(w, r, false, err)
 			return
 		}
