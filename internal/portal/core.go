@@ -346,12 +346,19 @@ func (s *Server) staffNames(ctx context.Context, v *viewer, ids []string) map[st
 	return out
 }
 
-// event writes a timeline row as the viewer. A failed timeline write never undoes the
+// event writes a timeline row as the viewer. A core that refuses timeline writes from a
+// client viewer (core main allows only admin, attorney and staff) gets the row as the
+// module's own service call instead, so the client's activity still reaches the
+// timeline, with the module as the actor. A failed timeline write never undoes the
 // action it records; it is reported in the module log.
 func (s *Server) event(ctx context.Context, v *viewer, action, recordType, recordID, matter, summary string, clientVisible bool) {
 	body := map[string]any{"action": action, "record_type": recordType, "record_id": recordID,
 		"matter_id": matter, "summary": summary, "client_visible": clientVisible}
-	if err := s.api.Post(ctx, v.Token, "/api/v1/events", body, nil); err != nil {
+	err := s.api.Post(ctx, v.Token, "/api/v1/events", body, nil)
+	if err != nil && v.isClient() && coreapi.StatusOf(err) == http.StatusForbidden {
+		err = s.api.Post(ctx, "", "/api/v1/events", body, nil)
+	}
+	if err != nil {
 		s.logf("client-portal: timeline %s on %s: %v", action, matter, err)
 	}
 }

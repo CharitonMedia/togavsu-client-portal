@@ -281,3 +281,27 @@ func TestMessages(t *testing.T) {
 		has(t, page.Body, "Probate")
 	})
 }
+
+// On a core that refuses timeline writes from a client viewer (core main today), the
+// client's rows still land, written by the module.
+func TestClientTimelineRowsOnCoreMain(t *testing.T) {
+	e := newEnv(t)
+	e.fc.ClientEventsRefused = true
+	th, _ := e.startThread(e.sam, e.m1.ID, e.cCasey.ID, "Hello", "Please read.")
+	e.openAs(e.casey, th.ID)
+	want(t, e.replyAs(e.casey, th.ID, "Read it."), http.StatusCreated)
+	got := map[string]string{}
+	e.fc.Lock(func() {
+		for _, ev := range e.fc.Events {
+			if ev.ActorKind == "module" {
+				got[ev.Action] = ev.ActorID
+				if !ev.ClientVisible || ev.MatterID != e.m1.ID {
+					t.Errorf("module row %+v", ev)
+				}
+			}
+		}
+	})
+	if got["client_portal.message_viewed"] != fakecore.ModuleID || got["client_portal.message_sent"] != fakecore.ModuleID {
+		t.Errorf("module-written rows: %v", got)
+	}
+}

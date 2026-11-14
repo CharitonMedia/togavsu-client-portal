@@ -199,10 +199,11 @@ type Core struct {
 	Provider       Provider
 	OtherNav       []map[string]any
 
-	MailFails        bool
-	AccessMailStatus string
-	Calls            []string
-	seq              int
+	MailFails           bool
+	ClientEventsRefused bool
+	AccessMailStatus    string
+	Calls               []string
+	seq                 int
 }
 
 // New returns an empty fake core. db, when set, is an admin connection to the test
@@ -576,7 +577,7 @@ func (c *Core) Handler() http.Handler {
 	m.HandleFunc("GET /api/v1/invoices/{id}", c.viewer(c.getInvoice))
 	m.HandleFunc("GET /api/v1/firm-profile", c.viewer(c.firm))
 	m.HandleFunc("GET /api/v1/nav/client-context", c.viewer(c.nav))
-	m.HandleFunc("POST /api/v1/events", c.viewer(c.createEvent))
+	m.HandleFunc("POST /api/v1/events", c.either(c.createEvent))
 	m.HandleFunc("POST /api/v1/notifications", c.either(c.createNotification))
 	m.HandleFunc("POST /api/v1/mail/messages", c.either(c.sendMail))
 	m.HandleFunc("GET /api/v1/client-access", c.viewer(c.getAccess))
@@ -1134,9 +1135,11 @@ func (c *Core) nav(w http.ResponseWriter, _ *http.Request, p principal) {
 	reply(w, 200, map[string]any{"data": out})
 }
 
-// createEvent appends a timeline row as the viewer. Firm users write on matters they
-// read; a client writes client-visible rows on their own readable matter, as the
-// client-portal spec section 5 expects.
+// createEvent appends a timeline row. Firm users write on matters they read; a client
+// writes client-visible rows on their own readable matter, as the client-portal spec
+// section 5 expects, unless ClientEventsRefused models core main, which takes timeline
+// writes only from admin, attorney and staff viewers. A service call writes as the
+// module.
 func (c *Core) createEvent(w http.ResponseWriter, r *http.Request, p principal) {
 	var in struct {
 		Action        string  `json:"action"`
@@ -1153,6 +1156,20 @@ func (c *Core) createEvent(w http.ResponseWriter, r *http.Request, p principal) 
 	m := ""
 	if in.MatterID != nil {
 		m = *in.MatterID
+	}
+	if p.service {
+		if m != "" && c.Matters[m] == nil {
+			problem(w, 404, "not_found", "matter")
+			return
+		}
+		c.Events = append(c.Events, Event{Action: in.Action, RecordType: in.RecordType, RecordID: in.RecordID, MatterID: m, Summary: in.Summary,
+			ClientVisible: in.ClientVisible, ActorID: p.module, ActorKind: "module"})
+		reply(w, 201, map[string]any{"action": in.Action})
+		return
+	}
+	if p.user.clientOnly() && c.ClientEventsRefused {
+		problem(w, 403, "forbidden", "admin, attorney or staff role is required")
+		return
 	}
 	if m != "" && !c.canRead(p.user, m) {
 		problem(w, 404, "not_found", "matter")
