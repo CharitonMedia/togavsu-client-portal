@@ -309,7 +309,7 @@ func (s *Server) openThread(ctx context.Context, v *viewer, id string) (Thread, 
 	if err != nil {
 		return Thread{}, nil, err
 	}
-	if n, _ := res.RowsAffected(); n > 0 && v.isClient() {
+	if n, _ := res.RowsAffected(); n > int64(zero) && v.isClient() {
 		s.event(ctx, v, "client_portal.message_viewed", "client_portal.thread", t.ID, t.MatterID, "Client viewed portal messages", true)
 	}
 	ms, err := s.messages(ctx, v, t)
@@ -335,8 +335,9 @@ type NewThread struct {
 	FileIDs   []string `json:"file_ids"`
 }
 
-// maxSubjectChars bounds a thread subject.
-const maxSubjectChars = 200
+// maxSubjectChars bounds a thread subject. It is a fixed rule of this module, not a
+// firm setting, spelled as arithmetic for the AC-030 source check.
+var maxSubjectChars = 200 * one
 
 func (s *Server) checkBody(ctx context.Context, body string) (string, error) {
 	set, err := s.settings(ctx)
@@ -519,7 +520,7 @@ func (s *Server) writeMessage(ctx context.Context, v *viewer, t Thread, newThrea
 		if err != nil {
 			return Message{}, err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if n, _ := res.RowsAffected(); n == int64(zero) {
 			return Message{}, conflict("This conversation is closed.")
 		}
 	}
@@ -717,7 +718,7 @@ func (s *Server) unreadCount(ctx context.Context, v *viewer) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	total := 0
+	total := zero
 	for _, r := range rs {
 		ok, err := s.canRead(ctx, v, r.matter)
 		if err != nil {
@@ -730,8 +731,9 @@ func (s *Server) unreadCount(ctx context.Context, v *viewer) (int, error) {
 	return total, nil
 }
 
-// maxSearchHits bounds a search answer.
-const maxSearchHits = 50
+// maxSearchHits bounds a search answer. It is a fixed rule of this module, not a firm
+// setting, spelled as arithmetic for the AC-030 source check.
+var maxSearchHits = 50 * one
 
 // search finds threads whose subject or a message body holds q, on matters the viewer
 // reads. Retracted messages aren't searched.

@@ -15,17 +15,28 @@ jobs:
           POSTGRES_PASSWORD: postgres
         ports:
           - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-retries 20
     env:
+      # A superuser URL: coretest creates a database and roles per test, and dbtest
+      # creates togavsu_client_portal and its module role.
       TOGAVSU_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+      GOPRIVATE: github.com/CharitonMedia
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
       - run: go vet ./...
-      - run: go test ./...
+      - name: Wait for Postgres
+        run: until pg_isready -h 127.0.0.1 -p 5432; do sleep 1; done
+      - run: go test -race ./...
+      # The step `go run github.com/CharitonMedia/togavsu/cmd/togavsu-module check package`
+      # returns when module-core lands. Until then the core main refuses the shipped
+      # manifest's pending fields (internal/coremain lists each with its CORE item), and
+      # go test checks the package instead: TestCoreMainVariantPassesCoreCheck runs the
+      # same check on the package without those fields, and
+      # TestFullManifestRefusedOnlyForPendingFields fails once the core accepts them.
       - run: docker build -t togavsu-client-portal .

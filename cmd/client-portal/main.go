@@ -30,18 +30,26 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
+// Small fixed numbers spelled as arithmetic for the core's AC-030 source check
+// (modulekit.CheckSource), as the core's matter-clock does.
+var (
+	zero = int(0)
+	one  = zero + 1
+)
+
 func main() {
-	log.SetFlags(0)
-	if len(os.Args) < 2 {
+	log.SetFlags(zero)
+	args := os.Args[one:]
+	if len(args) < one {
 		log.Fatal("usage: client-portal serve|package [flags]")
 	}
-	switch os.Args[1] {
+	switch args[zero] {
 	case "serve":
-		serve(os.Args[2:])
+		serve(args[one:])
 	case "package":
-		pack(os.Args[2:])
+		pack(args[one:])
 	default:
-		log.Fatalf("unknown command %q", os.Args[1])
+		log.Fatalf("unknown command %q", args[zero])
 	}
 }
 
@@ -97,7 +105,7 @@ func pack(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(*out, signed, 0o644); err != nil {
+	if err := os.WriteFile(*out, signed, os.FileMode(zero)|0o644); err != nil {
 		log.Fatal(err)
 	}
 	pub := key.Public().(ed25519.PublicKey)

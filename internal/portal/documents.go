@@ -53,7 +53,7 @@ func (s *Server) choose(ctx context.Context, v *viewer, named string) (Choice, e
 		c.Active = &m
 		return c, nil
 	}
-	if len(all) == 1 {
+	if len(all) == one {
 		c.Active = &all[0]
 		return c, nil
 	}

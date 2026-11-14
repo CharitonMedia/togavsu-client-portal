@@ -73,24 +73,40 @@ func TestPackageFiles(t *testing.T) {
 	}
 }
 
-// The real package dir passes the core's install check once CORE-03, CORE-08 and
-// CORE-10 land; until then the check names the field it refuses and this skips.
-func TestPackageDirPassesCoreCheck(t *testing.T) {
+// The full manifest keeps the spec's fields that wait on module-core items, and the
+// core main refuses the package for those fields alone: each field in coremain.Fields
+// is refused on its own, naming itself, and the manifest without them all passes
+// (TestCoreMainVariantPassesCoreCheck). When the core accepts a field this fails: drop
+// it from coremain.Fields. When it accepts them all, delete internal/coremain and put
+// the `togavsu-module check package` step back in CI.
+func TestFullManifestRefusedOnlyForPendingFields(t *testing.T) {
 	files, err := modulekit.ReadDir("package")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ms, err := modulekit.Check(files)
-	skipIfPending(t, err)
-	if len(ms) != 2 {
-		t.Fatalf("migrations = %d, want 2", len(ms))
+	_, _, err = modulekit.Check(files)
+	switch {
+	case err == nil:
+		t.Fatal("the core main now accepts the full package: delete internal/coremain and put the togavsu-module check step back in CI")
+	case coremain.Item(err) == "":
+		t.Fatalf("the full package is refused for something other than a pending field: %v", err)
 	}
-	raw, err := clientportal.Archive(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := modulekit.CheckPackage(raw); err != nil {
-		t.Fatal(err)
+	full := files[clientportal.ManifestFile]
+	for _, f := range coremain.Fields {
+		edited := make(map[string][]byte, len(files))
+		for name, b := range files {
+			edited[name] = b
+		}
+		edited[clientportal.ManifestFile] = coremain.Strip(full, f.Name)
+		_, _, err := modulekit.Check(edited)
+		switch {
+		case err == nil:
+			t.Errorf("the core main now accepts %s (%s, %s): drop it from coremain.Fields", f.Name, f.Where, f.Item)
+		case coremain.Item(err) != f.Item || !strings.Contains(err.Error(), f.Name):
+			t.Errorf("with only %s kept, the core refused: %v", f.Name, err)
+		default:
+			t.Logf("needs %s: %s refused: %v", f.Item, f.Name, err)
+		}
 	}
 }
 
@@ -239,5 +255,14 @@ func TestMigrationsStayInTheirSchema(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestSourcePassesCoreSettingsCheck runs the core's settings source check (AC-030) over
+// the module's Go source: no environment reads and no numeric configuration literals
+// outside settings. Test files are not checked.
+func TestSourcePassesCoreSettingsCheck(t *testing.T) {
+	if err := modulekit.CheckSource("."); err != nil {
+		t.Fatal(err)
 	}
 }

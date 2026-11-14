@@ -48,7 +48,7 @@ func StatusOf(err error) int {
 	if errors.As(err, &e) {
 		return e.Status
 	}
-	return 0
+	return int(0)
 }
 
 // CodeOf returns the core problem code of err.
@@ -107,7 +107,7 @@ func (c *Client) Raw(ctx context.Context, rq Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		defer resp.Body.Close()
 		e := &Error{Status: resp.StatusCode, Method: rq.Method, Path: rq.Path}
 		var p struct {

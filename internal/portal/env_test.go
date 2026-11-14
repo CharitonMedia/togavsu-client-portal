@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,9 +37,23 @@ type env struct {
 	i1, i1Draft, i1Void, i2   *fakecore.Invoice
 }
 
+// databaseURL is the Postgres superuser URL in TOGAVSU_TEST_DATABASE_URL. Without it
+// the test skips, except under CI, where it fails.
+func databaseURL(t *testing.T) string {
+	t.Helper()
+	raw := os.Getenv("TOGAVSU_TEST_DATABASE_URL")
+	if raw == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("TOGAVSU_TEST_DATABASE_URL is not set")
+		}
+		t.Skip("TOGAVSU_TEST_DATABASE_URL is not set")
+	}
+	return raw
+}
+
 func newEnv(t *testing.T) *env {
 	t.Helper()
-	db := dbtest.New(t)
+	db := dbtest.New(t, databaseURL(t))
 	e := &env{t: t, db: db, now: time.Date(2026, 11, 2, 15, 0, 0, 0, time.UTC)}
 	e.fc = fakecore.New(db.Admin)
 	e.fc.Now = e.clock

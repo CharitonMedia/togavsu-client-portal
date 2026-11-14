@@ -1,0 +1,51 @@
+# A stand-in for the lawpay-docuseal module, for client-portal's acceptance suite only:
+# it publishes the three views client-portal reads and declares the pay and sign client
+# tabs. It never ships. The client tabs wait on CORE-10.
+id: lawpay-docuseal
+name: Payments and signing (test fixture)
+version: "0.0.1"
+author: Chariton Media
+homepage: https://github.com/CharitonMedia/togavsu-client-portal
+license: Same as Togavsu
+price: Free
+container:
+  image: ghcr.io/charitonmedia/togavsu-lawpay-docuseal-fixture
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  port: 8080
+tabs:
+  # CORE-10
+  - id: pay
+    title: Pay
+    placement: client
+    path: /client/pay
+    nav: false
+  - id: sign
+    title: Sign
+    placement: client
+    path: /client/sign
+    nav: false
+data:
+  views:
+    - name: invoice_payability
+      record: invoice
+      key: invoice_id
+      columns:
+        - name: payable
+        - name: unpayable_reason
+        - name: in_progress_cents
+    - name: matter_payability
+      record: matter
+      key: matter_id
+      columns:
+        - name: trust_deposits_enabled
+        - name: minimum_deposit_cents
+    - name: signature_requests
+      record: file
+      key: file_id
+      columns:
+        - name: signing_request_id
+        - name: matter_id
+        - name: signer_contact_id
+        - name: status
+        - name: sent_at
+        - name: expires_at

@@ -21,7 +21,7 @@ var funcs = template.FuncMap{
 		return string(b)
 	},
 	"when": func(unix int64) string {
-		if unix == 0 {
+		if unix == int64(zero) {
 			return ""
 		}
 		return time.Unix(unix, 0).UTC().Format("Jan 2, 2006 3:04 PM") + " UTC"

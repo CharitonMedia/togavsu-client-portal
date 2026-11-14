@@ -45,8 +45,8 @@ CREATE TABLE message_notifications (
 
 CREATE VIEW thread_summary AS
   SELECT t.matter_id,
-         SUM(CASE WHEN t.status = 'active' THEN 1 ELSE 0 END) AS active_threads,
-         SUM(COALESCE(u.unread, 0)) AS unread_from_client,
+         SUM(CASE WHEN t.status = 'active' THEN 1 ELSE 0 END)::bigint AS active_threads,
+         SUM(COALESCE(u.unread, 0))::bigint AS unread_from_client,
          MAX(t.last_message_at) AS last_message_at
     FROM message_threads t
     LEFT JOIN (SELECT thread_id, COUNT(*) AS unread FROM messages

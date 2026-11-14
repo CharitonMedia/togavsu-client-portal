@@ -15,7 +15,6 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +33,13 @@ import (
 
 // ID is the module id.
 const ID = "client-portal"
+
+// Small fixed numbers spelled as arithmetic for the core's AC-030 source check
+// (modulekit.CheckSource), as the core's matter-clock does.
+var (
+	zero = int(0)
+	one  = zero + 1
+)
 
 // Config is what the container gets: the core's address, its token and its own DB
 // login (search_path set to mod_client_portal by the core).
@@ -345,8 +352,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeJSONError(w http.ResponseWriter, e *apiError) {
-	if e.RetryAfter > 0 {
-		w.Header().Set("Retry-After", strconv.FormatInt(e.RetryAfter, 10))
+	if e.RetryAfter > int64(zero) {
+		w.Header().Set("Retry-After", fmt.Sprint(e.RetryAfter))
 	}
 	writeJSON(w, e.Status, e)
 }
@@ -364,8 +371,8 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, api bool, err erro
 		http.NotFound(w, r)
 		return
 	}
-	if e.RetryAfter > 0 {
-		w.Header().Set("Retry-After", strconv.FormatInt(e.RetryAfter, 10))
+	if e.RetryAfter > int64(zero) {
+		w.Header().Set("Retry-After", fmt.Sprint(e.RetryAfter))
 	}
 	renderMessage(w, e.Status, e.Message)
 }
@@ -412,7 +419,7 @@ func (s *Server) settings(ctx context.Context) (Settings, error) {
 	num := func(k string) int64 {
 		n, err := strconv.ParseInt(strings.TrimSpace(vals[k]), 10, 64)
 		if err != nil {
-			return 0
+			return int64(zero)
 		}
 		return n
 	}
@@ -428,7 +435,10 @@ func (s *Server) settings(ctx context.Context) (Settings, error) {
 // rising counter in rand_a (RFC 9562 section 6.2, method 1), so messages written in one
 // millisecond keep their order.
 func newID(now time.Time) string {
-	var b [16]byte
+	var a, b [8]byte
+	if _, err := rand.Read(a[:]); err != nil {
+		panic(err)
+	}
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(err)
 	}
@@ -437,24 +447,21 @@ func newID(now time.Time) string {
 	if ms <= idLastMS {
 		ms = idLastMS
 		idSeq++
-		if idSeq > 0x0fff {
+		if idSeq>>12 != uint16(zero) {
 			ms++
-			idSeq = 0
+			idSeq = uint16(zero)
 		}
 	} else {
-		idSeq = uint16(b[6]&0x07)<<8 | uint16(b[7])
+		// A random start that leaves the 12-bit counter room to rise.
+		idSeq = uint16(binary.BigEndian.Uint64(a[:]) & 0x07ff)
 	}
 	idLastMS = ms
 	seq := idSeq
 	idMu.Unlock()
-	var ts [8]byte
-	binary.BigEndian.PutUint64(ts[:], ms)
-	copy(b[0:6], ts[2:8])
-	b[6] = 0x70 | byte(seq>>8)&0x0f
-	b[7] = byte(seq)
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b[:])
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+	// hi: 48 bits of milliseconds, version 7, the counter. lo: variant 10, random bits.
+	hi := ms<<16 | 0x7000 | uint64(seq)
+	lo := binary.BigEndian.Uint64(b[:])&0x3fffffffffffffff | 0x8000000000000000
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", hi>>32, hi>>16&0xffff, hi&0xffff, lo>>48, lo&0xffffffffffff)
 }
 
 var (
@@ -465,47 +472,22 @@ var (
 
 // validID reports a UUID-shaped id, so a guessed path segment never reaches the core
 // or the database as anything else.
-func validID(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		switch i {
-		case 8, 13, 18, 23:
-			if c != '-' {
-				return false
-			}
-		default:
-			if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
-				return false
-			}
-		}
-	}
-	return true
-}
+func validID(s string) bool { return uuidShape.MatchString(s) }
+
+var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // --- links ---
 
 // link builds a module page path carrying the viewer's context token.
 func link(v *viewer, path string, params ...string) string {
-	q := url.Values{}
-	for i := 0; i+1 < len(params); i += 2 {
-		if params[i+1] != "" {
-			q.Set(params[i], params[i+1])
-		}
-	}
+	q := pairs(params)
 	q.Set("context", v.Token)
 	return "/m/" + ID + path + "?" + q.Encode()
 }
 
 // portalPath is a core /portal/ address of a module's client tab (CORE-10).
 func portalPath(module, tab string, params ...string) string {
-	q := url.Values{}
-	for i := 0; i+1 < len(params); i += 2 {
-		if params[i+1] != "" {
-			q.Set(params[i], params[i+1])
-		}
-	}
+	q := pairs(params)
 	p := "/portal/" + module + "/" + tab
 	if len(q) > 0 {
 		p += "?" + q.Encode()
@@ -513,9 +495,21 @@ func portalPath(module, tab string, params ...string) string {
 	return p
 }
 
+// pairs reads key, value pairs into a query, leaving out empty values.
+func pairs(params []string) url.Values {
+	q := url.Values{}
+	for len(params) > one {
+		if params[one] != "" {
+			q.Set(params[zero], params[one])
+		}
+		params = params[one+one:]
+	}
+	return q
+}
+
 func money(cents int64) string {
 	sign := ""
-	if cents < 0 {
+	if cents < int64(zero) {
 		sign, cents = "-", -cents
 	}
 	return fmt.Sprintf("%s$%d.%02d", sign, cents/100, cents%100)

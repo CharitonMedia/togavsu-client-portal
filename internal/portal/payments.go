@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 
 	"github.com/CharitonMedia/togavsu-client-portal/internal/coreapi"
@@ -58,7 +59,7 @@ func readView[T any](ctx context.Context, s *Server, v *viewer, view string, ids
 		Data []T `json:"data"`
 	}
 	if err := s.api.Get(ctx, v.Token, "/api/v1/modules/"+Provider+"/views/"+view+"?"+q.Encode(), &out); err != nil {
-		if st := coreapi.StatusOf(err); st != 404 && st != 403 {
+		if st := coreapi.StatusOf(err); st != http.StatusNotFound && st != http.StatusForbidden {
 			s.logf("client-portal: %s view %s: %v", Provider, view, err)
 		}
 		return nil, false

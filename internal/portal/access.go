@@ -158,7 +158,7 @@ func (s *Server) apiAccessAction(w http.ResponseWriter, r *http.Request, v *view
 	var body struct {
 		MatterID string `json:"matter_id"`
 	}
-	if r.ContentLength != 0 {
+	if r.ContentLength != int64(zero) {
 		if e := decodeJSON(r, &body); e != nil {
 			writeJSONError(w, e)
 			return

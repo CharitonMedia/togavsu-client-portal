@@ -42,44 +42,70 @@ roles and attorney-only rules decide what each viewer sees. Its own tables live 
 
 ```
 cmd/client-portal/          serve and package subcommands
-package.go                  embedded package files and the packaging seam (Build)
+package.go                  embedded package files; Archive, Check, Build, SignFile (pkg/modulekit)
 package/togavsu-module.yaml the manifest
 package/migrations/         0001_messages.sql, 0002_portal_state.sql
 internal/portal/            the server: pages, JSON endpoints, templates, static files
 internal/coreapi/           the core API client
-internal/fakecore/          an in-memory fake core for tests
-internal/dbtest/            test database setup, as the core provisions a module
+internal/acceptance/        the acceptance suite on the real core (pkg/modulekit/coretest)
+internal/coremain/          test scaffolding: the package variant today's core main installs
+internal/fakecore/          an in-memory fake core for the fast suite
+internal/dbtest/            test database setup for the fake-core suite
 ```
+
+The module requires the core module (`github.com/CharitonMedia/togavsu`) for the public
+module kit, and no dependency the core's go.mod doesn't pin.
 
 ## Build, test and package
 
 ```sh
+gofmt -l .
 go vet ./...
-TOGAVSU_TEST_DATABASE_URL=postgres://postgres:pg@127.0.0.1:5432/postgres?sslmode=disable go test ./...
+TOGAVSU_TEST_DATABASE_URL=postgres://postgres:pg@127.0.0.1:5432/postgres?sslmode=disable go test -race ./...
 docker build -t togavsu-client-portal .
 ```
 
-The database tests create and use only a database named `togavsu_client_portal` on the
-server the URL names, plus a login role `togavsu_client_portal_mod`. Without the variable
-they skip, except under CI, where they fail. They run the module against
-`internal/fakecore`, which serves the core API operations the module calls with the
-core's access rules, including the module API update items it depends on. Every
-acceptance criterion MOD-POR-01 to 35 has a subtest named after it.
+`TOGAVSU_TEST_DATABASE_URL` is a Postgres superuser URL. Without it the database tests
+skip, except under CI, where they fail. Two suites use it:
 
-`client-portal package -key signing.key -out client-portal.signed.json` is in place but
-stops with a message for now: the core's packaging and signing code is internal to the
-core and can't be imported from another Go module, and a copy here would drift from
-what the core verifies. `Build` takes a `Packager`; the core's public signing and
-packaging tool will provide one. Once a package is signed, the admin adds the printed
-public key as a trusted signing key, installs the package on the Modules tab and
-approves its permissions. Set the manifest's image digest to the built image's digest
-before signing.
+- `internal/acceptance` installs the signed package on the real composed core
+  (`pkg/modulekit/coretest`: trusted key, install, approval of every permission), serves
+  the module in process with the token and database login the core handed over, and
+  drives MOD-POR-01 to 35 through the core's API, frames, access rules and database.
+  coretest makes and removes its own database and roles per test. A criterion that needs
+  a module-core item the core main lacks is written in full and skips naming the item
+  (`needs CORE-NN`), so the suite turns green criterion by criterion as module-core
+  lands. Until CORE-03, CORE-04, CORE-08, CORE-10, CORE-14, CORE-18 and CORE-19 land,
+  the suite installs the variant `internal/coremain` derives: the manifest without the
+  fields and scopes the core main refuses.
+- `internal/portal` runs every criterion against `internal/fakecore`, which serves the
+  core API operations the module calls, including the module-core items, with the
+  core's access rules. It creates a database named `togavsu_client_portal` and a role
+  `togavsu_client_portal_mod`, and drops both when each test ends.
+
+The root package's tests run the core's checks on the package and the source:
+`TestCoreMainVariantPassesCoreCheck` runs the install check on the package without the
+pending fields, `TestFullManifestRefusedOnlyForPendingFields` shows the core main
+refuses the shipped manifest for each pending field in `internal/coremain` and nothing
+else (it fails once the core accepts one), and `TestSourcePassesCoreSettingsCheck` runs
+`modulekit.CheckSource`, the core's settings source check (no environment reads, no
+numeric configuration literals outside settings). Fixed numbers in the source are
+spelled as arithmetic, as the core's matter-clock does, so the check can tell them from
+tunables. When module-core lands, `togavsu-module check package` passes on the package
+directory and returns to CI.
+
+`client-portal package -key signing.key -out client-portal.signed.json` reads a base64
+Ed25519 seed, runs the core's install check on the package through `pkg/modulekit`,
+refuses to sign what the core would refuse, writes the signed package file and prints
+the public key for the admin to add as a trusted signing key. Until the CORE items
+above land the check refuses the real manifest, as `togavsu-module check package` does.
+The manifest's image digest is a placeholder that the release workflow pins.
 
 ## Core requirements
 
 The manifest and the server use items of the core's module API update
 (docs/modules/CORE-CHANGES.md in the core repository): CORE-01 service calls, CORE-03
-module notifications, CORE-04 module mail, CORE-05 module settings, CORE-08 sidebar
-badges, CORE-09 context refresh, CORE-10 client tabs and `client_home`, CORE-11 to
-CORE-16 client reads and writes, CORE-18 firm profile, CORE-19 user directory and
-CORE-21 matter includes. The module installs on a core that has them.
+module notifications, CORE-04 module mail, CORE-05 system mail routing, CORE-08 sidebar
+badges, CORE-09 the frame bridge, CORE-10 client tabs and `client_home`, CORE-11 to
+CORE-16 client reads and writes, CORE-18 firm profile and CORE-19 user directory. The
+module installs on a core that has them.
