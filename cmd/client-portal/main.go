@@ -7,15 +7,15 @@
 // togavsu_api_token, togavsu_db_role and togavsu_db_password. The module subscribes to
 // no events, so it reads no webhook secret.
 //
-// package waits on the core's public signing and packaging tool; until then it stops
-// with a message instead of writing a package the core might not accept.
+// package checks the package with the core's install check and writes the signed
+// package file, both through the public module kit (pkg/modulekit).
 package main
 
 import (
 	"crypto/ed25519"
 	"database/sql"
-	"encoding/base64"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -26,6 +26,7 @@ import (
 
 	clientportal "github.com/CharitonMedia/togavsu-client-portal"
 	"github.com/CharitonMedia/togavsu-client-portal/internal/portal"
+	"github.com/CharitonMedia/togavsu/pkg/modulekit"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -84,16 +85,21 @@ func pack(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
-	if err != nil || len(seed) != ed25519.SeedSize {
-		log.Fatal("the key file must hold a base64 ed25519 seed")
-	}
-	pkg, err := clientportal.Build(clientportal.Unavailable{}, ed25519.NewKeyFromSeed(seed), nil)
+	key, err := modulekit.ParseSeed(string(raw))
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := os.WriteFile(*out, pkg, 0o644); err != nil {
+	// Refuse to sign what the core would refuse to install.
+	if err := clientportal.Check(nil); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %s", *out)
+	signed, err := clientportal.Build(key, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(*out, signed, 0o644); err != nil {
+		log.Fatal(err)
+	}
+	pub := key.Public().(ed25519.PublicKey)
+	fmt.Printf("wrote %s, signed by key %s\npublic key (add it as a trusted signing key, public_key_pem):\n%s", *out, modulekit.KeyID(pub), modulekit.PublicKeyPEM(pub))
 }
