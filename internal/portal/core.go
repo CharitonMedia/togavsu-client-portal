@@ -23,15 +23,15 @@ type Me struct {
 
 // Matter is a core matter (for a client, the CORE-11 field allowlist).
 type Matter struct {
-	ID                        string   `json:"id"`
-	Number                    string   `json:"number"`
-	Name                      string   `json:"name"`
-	Status                    string   `json:"status"`
-	OpenedOn                  string   `json:"opened_on"`
-	ClosedOn                  *string  `json:"closed_on"`
-	ResponsibleAttorneyUserID *string  `json:"responsible_attorney_user_id"`
-	ResponsibleAttorneyName   string   `json:"responsible_attorney_name"`
-	AssignedStaffUserIDs      []string `json:"assigned_staff_user_ids"`
+	ID                        string                      `json:"id"`
+	Number                    string                      `json:"number"`
+	Name                      string                      `json:"name"`
+	Status                    string                      `json:"status"`
+	OpenedOn                  string                      `json:"opened_on"`
+	ClosedOn                  *string                     `json:"closed_on"`
+	ResponsibleAttorneyUserID *string                     `json:"responsible_attorney_user_id"`
+	ResponsibleAttorneyName   string                      `json:"responsible_attorney_name"`
+	AssignedStaffUserIDs      []string                    `json:"assigned_staff_user_ids"`
 	Included                  map[string][]map[string]any `json:"included,omitempty"`
 }
 

@@ -175,7 +175,7 @@ func List[T any](ctx context.Context, c *Client, viewer, path string) ([]T, erro
 			p += sep + "cursor=" + url.QueryEscape(cursor)
 		}
 		var page struct {
-			Data []T `json:"data"`
+			Data []T  `json:"data"`
 			Page Page `json:"page"`
 		}
 		if err := c.Get(ctx, viewer, p, &page); err != nil {

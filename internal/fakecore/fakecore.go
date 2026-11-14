@@ -62,11 +62,11 @@ func (u *User) clientOnly() bool {
 
 // ContactInfo is one row of a contact's primary email, phone and address history.
 type ContactInfo struct {
-	Email, Phone                                   string
+	Email, Phone                                    string
 	Line1, Line2, City, Region, PostalCode, Country string
-	EffectiveFrom                                  int64
-	EffectiveTo                                    int64 // 0 while current
-	ActorID                                        string
+	EffectiveFrom                                   int64
+	EffectiveTo                                     int64 // 0 while current
+	ActorID                                         string
 }
 
 // Contact is a core contact.
@@ -1374,4 +1374,3 @@ func (c *Core) FileCount() int {
 	defer c.mu.Unlock()
 	return len(c.Files)
 }
-

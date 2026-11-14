@@ -487,4 +487,3 @@ func (s *Server) uploadPost(w http.ResponseWriter, r *http.Request, v *viewer) {
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": f.ID, "name": f.Name})
 }
-

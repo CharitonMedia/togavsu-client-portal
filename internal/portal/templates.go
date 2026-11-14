@@ -26,12 +26,12 @@ var funcs = template.FuncMap{
 		}
 		return time.Unix(unix, 0).UTC().Format("Jan 2, 2006 3:04 PM") + " UTC"
 	},
-	"css": func(s string) template.CSS { return template.CSS(s) },
-	"pay":     payLink,
-	"deposit": depositLink,
-	"sign":    signLink,
+	"css":      func(s string) template.CSS { return template.CSS(s) },
+	"pay":      payLink,
+	"deposit":  depositLink,
+	"sign":     signLink,
 	"download": downloadPath,
-	"portal": func(module, tab string) string { return portalPath(module, tab) },
+	"portal":   func(module, tab string) string { return portalPath(module, tab) },
 }
 
 const layouts = `
